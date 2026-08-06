@@ -919,6 +919,24 @@ export type CloudflareAccountOption = {
 // Supported AI providers.
 export type AiModelProvider = "openai" | "anthropic" | "google" | "cloudflare" | "ollama" | "deepseek";
 
+/** A workspace's declarative agent configuration. */
+export interface AgentDefinition {
+  /** Schema version for the stored definition. */
+  version: 1;
+
+  /** Prompt fragments appended to the regular agent's dynamic system-prompt slot, in order. */
+  prompts?: string[];
+
+  /** Context collection or other skill references reserved for later expansion. */
+  skills?: string[];
+
+  /** Optional model selection metadata. Omit or set null to keep the current model behavior. */
+  model?: { provider: AiModelProvider; model: string } | null;
+
+  /** Tool allow/deny rules. A non-empty enabled list takes precedence over disabled. */
+  tools?: { enabled?: string[]; disabled?: string[] } | null;
+}
+
 // Information about the AI gateway configuration. Returned by `AuthenticatedApi.getAiConfig()`.
 export type AiGatewayInfo = {
   enabled: true;
@@ -1297,6 +1315,15 @@ export type AgentSpawnerConfig = {
 export interface Overseer extends RpcTarget {
   // Get metadata describing this workspace.
   getMetadata(): Promise<GadgetMetadata>;
+
+  /** Return this workspace's agent definition, or null when it uses the default behavior. */
+  getAgentDefinition(): Promise<AgentDefinition | null>;
+
+  /** Validate and persist this workspace's agent definition. */
+  saveAgentDefinition(definition: AgentDefinition): Promise<void>;
+
+  /** Remove this workspace's agent definition and restore the default behavior. */
+  resetAgentDefinition(): Promise<void>;
 
   // Get metadata describing this workspace and subscribe to changes.
   //

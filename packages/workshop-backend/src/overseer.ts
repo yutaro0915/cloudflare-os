@@ -1,6 +1,6 @@
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
-import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName } from '@gadgets/workshop-shared/api';
+import { Overseer, AgentDefinition, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, HookInitiator, ResourceDescription, ApprovalQueue, ActionDescription, ObservationAuthorizer, ObservationDescription, VendorDescription, SupportedResource, resolveRequestedResource, HookController, HookDescription, AGENT_CATALOG_MAX_ENTRIES, ActionKind } from "@gadgets/workshop-shared/gatekeeper";
 import {
   DurableObject, WorkerEntrypoint, RpcStub as NativeRpcStub,
@@ -45,6 +45,7 @@ import {
   validateChatAttachmentUpload,
 } from "./chat-attachment-validation";
 import { renderGadgetPdf } from "./browser-export";
+import { validateAgentDefinition } from "./agent-definition";
 
 const logger = createWorkshopLogger("workshop.overseer");
 export const AGENT_RUNNING_ERROR_MESSAGE = "Agent is running, wait for it to finish.";
@@ -685,6 +686,9 @@ function makeOverseerStorage(storage: DurableObjectStorage) {
 
       // The workspace title. (Each chat, gatekeeper, and gadget has its own title, elsewhere.)
       title: "Untitled Workspace",
+
+      // Workspace-level declarative agent behavior. Null preserves the legacy defaults.
+      agentDefinition: <AgentDefinition | null>null,
 
       // If present, this gadget was migrated from version zero, when a workspace had only one
       // gadget. Many stored records that normally contain a `gadgetId` might be missing it; they
@@ -5555,6 +5559,19 @@ class OverseerImpl implements AgentHooks {
     }
   }
 
+  async getAgentDefinition(): Promise<AgentDefinition | null> {
+    return this.storage.agentDefinition.get();
+  }
+
+  async saveAgentDefinition(definition: AgentDefinition): Promise<void> {
+    validateAgentDefinition(definition);
+    this.storage.agentDefinition.put(definition);
+  }
+
+  async resetAgentDefinition(): Promise<void> {
+    this.storage.agentDefinition.put(null);
+  }
+
   async listConnectableVendors(): Promise<{id: string, displayName: string}[]> {
     try {
       let vendors = await this.#listGatekeeperVendorsCached();
@@ -7164,6 +7181,18 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
       result.owner = await this.owner.whoami();
     }
     return result;
+  }
+
+  async getAgentDefinition(): Promise<AgentDefinition | null> {
+    return this.impl.getAgentDefinition();
+  }
+
+  async saveAgentDefinition(definition: AgentDefinition): Promise<void> {
+    return this.impl.saveAgentDefinition(definition);
+  }
+
+  async resetAgentDefinition(): Promise<void> {
+    return this.impl.resetAgentDefinition();
   }
 
   async subscribeToMetadata(
@@ -8866,6 +8895,9 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
   // --- Denied methods (build-only) ---
 
   async setTitle(_title: string): Promise<void> { this.#deny(); }
+  async getAgentDefinition(): Promise<AgentDefinition | null> { this.#deny(); }
+  async saveAgentDefinition(_definition: AgentDefinition): Promise<void> { this.#deny(); }
+  async resetAgentDefinition(): Promise<void> { this.#deny(); }
   async setPinned(_pinned: boolean): Promise<void> { this.#deny(); }
   async deleteSelf(): Promise<void> { this.#deny(); }
   async createGadget(_title: string): Promise<RpcStub<GadgetClient>> { this.#deny(); }

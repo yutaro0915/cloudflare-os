@@ -1,4 +1,4 @@
-import { AiChatMessage, AiChatAuthorInfo, AiToolCall, AiChatMessageBody, AgentSpawnerConfig, AiChatStreamEvent, BlueprintOutput, WorkpieceId, type AiModelConfig, isTextLikeAttachmentMimeType, validateBindingName } from '@gadgets/workshop-shared/api';
+import { AiChatMessage, AiChatAuthorInfo, AiToolCall, AiChatMessageBody, AgentSpawnerConfig, AiChatStreamEvent, BlueprintOutput, WorkpieceId, type AgentDefinition, type AiModelConfig, isTextLikeAttachmentMimeType, validateBindingName } from '@gadgets/workshop-shared/api';
 import { PDF_MIME_TYPE, modelApiSupportsPdfAttachments } from './chat-attachment-pdf';
 import { AgentCatalog, ObservationDescription } from '@gadgets/workshop-shared/gatekeeper';
 import { createWorkshopLogger } from "./observability";
@@ -18,6 +18,7 @@ import { formatInstanceInstructions } from "./admin-config";
 import type { AiGatewayLogRoute } from "./ai-gateway";
 import { AgentTurnError, completeText, httpStatusFromError, zeroUsage } from "./ai-invoke";
 import type { ModelHandle } from "./ai-models";
+import { appendAgentDefinitionPrompts, filterAgentTools } from "./agent-definition";
 import {
   buildCompactionState, buildSummaryPrompt, COMPACTION_SYSTEM_PROMPT, estimateProjectionTokens,
   findCompactionBoundary, findProtectedFromSequence, getModelTokenLimits, isCompactionTurn,
@@ -319,6 +320,9 @@ export interface AgentHooks {
   // Deployment-wide, admin-authored instructions to append to the agent's system prompt. Returns
   // "" when none are set. Read on each turn so admin edits take effect promptly.
   getInstanceInstructions(): Promise<string>;
+
+  // Read the workspace-level declarative agent definition applied to this turn.
+  getAgentDefinition(): Promise<AgentDefinition | null>;
 
   // Connection-request hooks for the agent.
   //
@@ -2043,6 +2047,7 @@ export async function runAgent(
   };
 
   let agentContext = hooks.getChatAgentContext(chatId);
+  let agentDefinition = await hooks.getAgentDefinition();
   let emitStreamEvent = (event: AiChatStreamEvent) => {
     hooks.emitChatStreamEvent(chatId, event);
   };
@@ -2199,6 +2204,8 @@ export async function runAgent(
     ];
   }
 
+  systemPromptSlots[1] = appendAgentDefinitionPrompts(
+      systemPromptSlots[1], agentDefinition, agentContext.spawnerConfig !== undefined);
   let systemPrompt = `${systemPromptSlots[0]}\n\n${systemPromptSlots[1]}`;
 
   // Some models charge their response to the same window as the prompt, so the reservation is both
@@ -2839,6 +2846,8 @@ export async function runAgent(
       ...(callbackInitiated ? {giveUp: tools.giveUp} : {}),
     };
   }
+
+  tools = filterAgentTools(tools, agentDefinition?.tools);
 
   let toolList = Object.values(tools);
 
