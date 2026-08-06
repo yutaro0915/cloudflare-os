@@ -124,6 +124,7 @@ function catalogModel(provider: AiModelConfig["provider"], modelId: string): Mod
     case "google": return (GOOGLE_MODELS as Record<string, Model<Api>>)[modelId];
     case "cloudflare": return (CLOUDFLARE_WORKERS_AI_MODELS as Record<string, Model<Api>>)[modelId];
     case "ollama": return undefined;
+    case "deepseek": return undefined;
     default: return undefined;
   }
 }
@@ -230,6 +231,22 @@ function gatewayNativeModel(config: AiModelConfig, gatewayUrl: string): Model<Ap
         cost: catalog?.cost ?? ZERO_COST,
         ...window,
         compat: workersAiCompat(catalog),
+      };
+    case "deepseek":
+      // Reached through AI Gateway's custom-provider endpoint for the account's "opencode-go"
+      // provider (upstream: https://opencode.ai/zen/go, OpenAI-completions compatible). The
+      // provider slug is baked into the gateway path; the gateway holds the upstream API key
+      // (BYOK) and the platform token authorizes the call.
+      return {
+        id: config.model,
+        name: catalog?.name ?? config.model,
+        api: "openai-completions",
+        provider: "deepseek",
+        baseUrl: `${gatewayUrl}/custom-opencode-go/v1`,
+        reasoning: true,
+        input: catalog?.input ?? ["text", "image"],
+        cost: catalog?.cost ?? ZERO_COST,
+        ...window,
       };
     default:
       return undefined;
@@ -583,6 +600,24 @@ function getModelDirect(config: AiModelConfig, sessionAffinity?: string): ModelH
           ...window,
           thinkingLevelMap: catalog?.thinkingLevelMap,
           compat: catalog?.compat,
+        },
+        apiKey: config.apiToken,
+        sessionAffinity,
+      });
+    case "deepseek":
+      // Direct DeepSeek access via its OpenAI-completions-compatible endpoint. Used only when no
+      // AI Gateway is configured (the deployment-funded path routes through "opencode-go").
+      return makeHandle({
+        model: {
+          id: config.model,
+          name: catalog?.name ?? config.model,
+          api: "openai-completions",
+          provider: "deepseek",
+          baseUrl: config.apiUrl ?? "https://api.deepseek.com/v1",
+          reasoning: true,
+          input: catalog?.input ?? ["text", "image"],
+          cost: catalog?.cost ?? ZERO_COST,
+          ...window,
         },
         apiKey: config.apiToken,
         sessionAffinity,
