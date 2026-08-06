@@ -2205,7 +2205,7 @@ export async function runAgent(
   }
 
   systemPromptSlots[1] = appendAgentDefinitionPrompts(
-      systemPromptSlots[1], agentDefinition, agentContext.spawnerConfig !== undefined);
+      systemPromptSlots[1], agentDefinition, !!agentContext.spawnerConfig);
   let systemPrompt = `${systemPromptSlots[0]}\n\n${systemPromptSlots[1]}`;
 
   // Some models charge their response to the same window as the prompt, so the reservation is both
