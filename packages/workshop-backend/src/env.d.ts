@@ -23,6 +23,12 @@ declare global {
       // Note: outside gateway mode, Workers AI (provider "cloudflare") is BYOK like every other
       // provider -- the account ID and API token live in the user's model config, not in env.
 
+      // DeepSeek (provider "deepseek") is routed DIRECTLY to opencode.ai from this Worker, even
+      // when AI Gateway mode is on: opencode.ai's billing rejects gateway-proxied requests
+      // (CreditsError / Insufficient balance) while plain Worker fetches with the same key work.
+      // The key is a worker secret, so users never see or configure it.
+      OPENCODE_GO_API_KEY?: string;
+
       // Blueprint storage bindings.
       BLUEPRINTS: KVNamespace;             // Workers KV for blueprint metadata lookup
       BLUEPRINT_CONTENT: R2Bucket;         // R2 bucket for blueprint code snapshots
