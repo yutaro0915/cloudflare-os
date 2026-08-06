@@ -351,39 +351,6 @@ function makeHandle(args: HandleArgs): ModelHandle {
 }
 
 /**
- * DeepSeek reached through opencode.ai's OpenAI-completions-compatible endpoint. opencode.ai
- * rejects requests proxied through Cloudflare AI Gateway at the billing layer (CreditsError /
- * Insufficient balance) even though plain direct fetches with the same key succeed, so this path
- * bypasses the gateway entirely. The upstream key is read from the worker environment
- * (OPENCODE_GO_API_KEY), never from user-supplied config.
- */
-function getModelDeepseekDirect(env: Cloudflare.Env, config: AiModelConfig,
-                                sessionAffinity?: string): ModelHandle {
-  const apiKey = env.OPENCODE_GO_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-        "OPENCODE_GO_API_KEY is not configured on the workshop worker; cannot route DeepSeek traffic.");
-  }
-  const catalog = catalogModel("deepseek", config.model);
-  const window = modelTokenWindow(config, catalog);
-  return makeHandle({
-    model: {
-      id: config.model,
-      name: catalog?.name ?? config.model,
-      api: "openai-completions",
-      provider: "deepseek",
-      baseUrl: "https://opencode.ai/zen/go/v1",
-      reasoning: true,
-      input: catalog?.input ?? ["text", "image"],
-      cost: catalog?.cost ?? ZERO_COST,
-      ...window,
-    },
-    apiKey,
-    sessionAffinity,
-  });
-}
-
-/**
  * Resolve an AiModelConfig to a ModelHandle, choosing among three routing modes: the user's own
  * AI Gateway (BYOK unified billing), the platform's AI Gateway (free tier), or direct provider
  * access with the config's own credentials. The handle carries the matching AI Gateway log route
@@ -399,11 +366,6 @@ export function getModel(env: Cloudflare.Env, config: AiModelConfig,
     return getModelViaUserGateway(
         config, buildMetadata(initiator, options.metadata), options.userGateway,
         options.sessionAffinity);
-  }
-
-  // DeepSeek (opencode.ai) is routed directly even in gateway mode -- see getModelDeepseekDirect.
-  if (config.provider === "deepseek") {
-    return getModelDeepseekDirect(env, config, options.sessionAffinity);
   }
 
   // Otherwise: when a platform AI Gateway is configured, route through it (platform-funded free
