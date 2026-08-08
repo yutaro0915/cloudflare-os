@@ -318,9 +318,22 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   #migrateAgentDefinitions(): void {
-    if (this.storage.agentDefinitionsVersion.get() !== 0) return;
+    let storedVersion = this.storage.agentDefinitionsVersion.get();
+    if (storedVersion >= 2) return;
     this.ctx.storage.transactionSync(() => {
+      if (storedVersion === 0) this.#migrateLegacyAgentDefinitions();
+      // v2 -> v3: bindings becomes a first-class (optional) field; existing agents get none.
       for (let stored of Array.from(this.storage.agentDefinitions.list())) {
+        if ((stored as {version: number}).version === 2) {
+          this.storage.agentDefinitions.put({...stored, version: 3, bindings: []});
+        }
+      }
+      this.storage.agentDefinitionsVersion.put(2);
+    });
+  }
+
+  #migrateLegacyAgentDefinitions(): void {
+    for (let stored of Array.from(this.storage.agentDefinitions.list())) {
         let legacy = stored as unknown as LegacyAgentDefinition;
         if (legacy.version !== 1 || !Array.isArray(legacy.skills)) continue;
         let skillIds = legacy.skills.map((markdown, index) => {
@@ -336,7 +349,8 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
           this.storage.skillDefinitions.put(candidate);
           return candidate.id;
         });
-        let definition: AgentDefinition = {
+        // Written at v2; the caller's v2 -> v3 sweep upgrades these in the same transaction.
+        this.storage.agentDefinitions.put({
           version: 2,
           id: legacy.id,
           name: legacy.name,
@@ -344,11 +358,8 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
           agentsMd: legacy.agentsMd,
           skillIds,
           tools: legacy.tools,
-        };
-        this.storage.agentDefinitions.put(definition);
-      }
-      this.storage.agentDefinitionsVersion.put(1);
-    });
+        } as unknown as AgentDefinition);
+    }
   }
 
   async authenticate(token: string): Promise<void> {
@@ -640,7 +651,24 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
         throw new Error(`No such skill: ${skillId}`);
       }
     }
+    for (let binding of definition.bindings ?? []) {
+      // Deployment-level check only: the account (and the resource itself) is resolved at chat
+      // start, so a not-yet-connected vendor is fine here but a nonexistent one is a typo.
+      if (!this.vendors.has(binding.vendorId)) {
+        throw new Error(`No such gatekeeper vendor: ${binding.vendorId}`);
+      }
+    }
     this.storage.agentDefinitions.put(definition);
+  }
+
+  // Find this user's connected account for a vendor, for resolving Agent-definition bindings at
+  // chat start. Auto-provisioned vendors have at most one account; for multi-account vendors the
+  // first (oldest) connected account wins. Returns null when the vendor isn't connected.
+  async findConnectedAccountByVendor(vendorId: string): Promise<number | null> {
+    for (let record of this.#connectedAccountRecords()) {
+      if (record.vendorId === vendorId) return record.id;
+    }
+    return null;
   }
 
   // DO NOT MAKE PUBLIC -- returns API keys. Preview definitions are validated and resolved exactly

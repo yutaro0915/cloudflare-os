@@ -27,9 +27,9 @@ const skill: SkillDefinition = {
 };
 
 describe("validateAgentDefinition", () => {
-  it("accepts a complete version 2 definition", () => {
+  it("accepts a complete version 3 definition", () => {
     let definition = {
-      version: 2,
+      version: 3,
       id: "reviewer",
       name: "Reviewer",
       modelId: "gpt-5.6-sol",
@@ -43,7 +43,7 @@ describe("validateAgentDefinition", () => {
 
   it("rejects unknown fields at every defined object level", () => {
     let base = {
-      version: 2,
+      version: 3,
       id: "reviewer",
       name: "Reviewer",
       modelId: "gpt-5.6-sol",
@@ -57,9 +57,36 @@ describe("validateAgentDefinition", () => {
         .toThrow(/unknown field "extra"/);
   });
 
+  it("validates bindings: names, duplicates, and resource URLs", () => {
+    let base = {
+      version: 3,
+      id: "mascot",
+      name: "Mascot",
+      modelId: "gpt-5.6-sol",
+      agentsMd: "",
+      skillIds: [],
+      tools: null,
+    };
+    let binding = {name: "MEMORY", vendorId: "memory", resourceUrl: "memory://bank/mascot"};
+
+    expect(() => validateAgentDefinition({...base, bindings: []})).not.toThrow();
+    expect(() => validateAgentDefinition({...base, bindings: [binding]})).not.toThrow();
+    expect(() => validateAgentDefinition({...base, bindings: [binding, {...binding, resourceUrl: "memory://bank/other"}]}))
+        .toThrow(/used by another binding/);
+    expect(() => validateAgentDefinition({...base, bindings: [{...binding, name: "1BAD"}]}))
+        .toThrow(/binding names must be JavaScript identifiers/);
+    expect(() => validateAgentDefinition({...base, bindings: [{...binding, resourceUrl: "not a url"}]}))
+        .toThrow(/must be a valid URL/);
+    expect(() => validateAgentDefinition({...base, bindings: [{...binding, vendorId: ""}]}))
+        .toThrow(/vendorId/);
+    expect(() => validateAgentDefinition({...base, bindings: [{...binding, extra: 1}]}))
+        .toThrow(/unknown field "extra"/);
+    expect(() => validateAgentDefinition({...base, bindings: {}})).toThrow(/must be an array/);
+  });
+
   it("rejects unknown tool names", () => {
     expect(() => validateAgentDefinition({
-      version: 2,
+      version: 3,
       id: "reviewer",
       name: "Reviewer",
       modelId: "gpt-5.6-sol",
@@ -72,7 +99,7 @@ describe("validateAgentDefinition", () => {
 
   it("requires AGENTS.md to be a string", () => {
     expect(() => validateAgentDefinition({
-      version: 2,
+      version: 3,
       id: "reviewer",
       name: "Reviewer",
       modelId: "gpt-5.6-sol",
@@ -85,7 +112,7 @@ describe("validateAgentDefinition", () => {
 
   it("requires identity, model, and collection fields", () => {
     expect(() => validateAgentDefinition({
-      version: 2,
+      version: 3,
       id: "",
       name: "Reviewer",
       modelId: "gpt-5.6-sol",
@@ -94,7 +121,7 @@ describe("validateAgentDefinition", () => {
       tools: null,
     })).toThrow(/id must be a non-empty string/);
     expect(() => validateAgentDefinition({
-      version: 2,
+      version: 3,
       id: "reviewer",
       name: "Reviewer",
       modelId: "gpt-5.6-sol",
@@ -198,7 +225,7 @@ describe("filterAgentTools", () => {
 
 describe("appendAgentDefinitionInstructions", () => {
   let definition: AgentDefinition = {
-    version: 2,
+    version: 3,
     id: "reviewer",
     name: "Reviewer",
     modelId: "gpt-5.6-sol",

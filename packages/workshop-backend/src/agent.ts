@@ -37,6 +37,11 @@ export type AiChatAgentContext = {
   // saved definition affect only new chats.
   agentDefinition?: AgentDefinitionSnapshot;
 
+  // Workpieces resolved from the agent definition's bindings when this chat was created, keyed by
+  // the definition's binding names. Folded into the seed binding map on first use (spawned chats
+  // excepted -- the spawner's env is exclusive). Bindings that failed to resolve are absent.
+  agentBindings?: Record<string, WorkpieceId>;
+
   // If present, this chat was spawned using a spawner, and this was the spawner config at the
   // time.
   spawnerConfig?: AgentSpawnerConfig;

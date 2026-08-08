@@ -966,10 +966,28 @@ export const CUSTOM_AGENT_TOOL_NAMES = [
   "giveUp",
 ] as const;
 
+/**
+ * A resource binding an Agent definition asks for. Resolved when a chat is started with the
+ * agent: the vendorId selects one of the user's connected accounts (the binding is skipped if
+ * none is connected), and the resourceUrl is minted into a gatekeeper workpiece through
+ * `getGatekeeperClassFor` -- so admin disable rules apply automatically. The account id is
+ * deliberately not stored: re-resolving by vendor survives account reconnection.
+ */
+export type AgentBindingRef = {
+  /** Binding name the agent sees in its env (e.g. "MEMORY"). Must pass validateBindingName. */
+  name: string;
+
+  /** Vendor id of the connected account to resolve against (e.g. "memory"). */
+  vendorId: string;
+
+  /** Resource URL to bind (e.g. "memory://bank/mascot"). */
+  resourceUrl: string;
+};
+
 /** A user-owned custom agent available when starting a conversation. */
 export interface AgentDefinition {
   /** Schema version for the stored definition. */
-  version: 2;
+  version: 3;
 
   /** Stable user-scoped identifier. */
   id: string;
@@ -988,6 +1006,9 @@ export interface AgentDefinition {
 
   /** Tool allow/deny rules. A non-empty enabled list takes precedence over disabled. */
   tools: { enabled?: string[]; disabled?: string[] } | null;
+
+  /** Resource bindings resolved into the chat's env when a chat starts with this agent. */
+  bindings?: AgentBindingRef[];
 }
 
 /** Metadata derived from a SKILL.md frontmatter block. */

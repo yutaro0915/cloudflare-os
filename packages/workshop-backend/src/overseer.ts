@@ -1,6 +1,6 @@
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
-import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, type AgentDefinition } from '@gadgets/workshop-shared/api';
+import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, type AgentDefinition, type AgentBindingRef } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, HookInitiator, ResourceDescription, ApprovalQueue, ActionDescription, ObservationAuthorizer, ObservationDescription, VendorDescription, SupportedResource, resolveRequestedResource, HookController, HookDescription, AGENT_CATALOG_MAX_ENTRIES, ActionKind } from "@gadgets/workshop-shared/gatekeeper";
 import {
   DurableObject, WorkerEntrypoint, RpcStub as NativeRpcStub,
@@ -3434,6 +3434,9 @@ class OverseerImpl implements AgentHooks {
         attachments, userMeta.aiModel?.config.provider);
     let prepared = await this.#prepareChatMessage(
         initialMessage, (canonicalAttachments?.length ?? 0) > 0);
+    let agentBindings = userMeta.agentDefinition
+        ? await this.#resolveAgentBindings(clientUser, userMeta.agentDefinition)
+        : undefined;
 
     let chatId!: number;
     let timestamp = this.getChatTimestamp();
@@ -3453,6 +3456,7 @@ class OverseerImpl implements AgentHooks {
         this.storage.chatContext.put({
           chatId,
           agentDefinition: userMeta.agentDefinition,
+          ...(agentBindings && {agentBindings}),
         });
       }
 
@@ -4544,6 +4548,58 @@ class OverseerImpl implements AgentHooks {
   //     (via the quick model when configured, else the gatekeeper's suggested name) and stamped,
   //     so history replay always sees named resources. Stamped = permanent; a crash before
   //     stamping just means naming reruns next turn.
+  // Resolve an agent definition's binding refs into gatekeeper workpieces, at chat creation.
+  // Reuses an existing workpiece minted for the same vendor + resource (so every chat with the
+  // agent shares one gatekeeper DO and its storage); otherwise mints one through the user DO's
+  // getGatekeeperClassFor, which applies admin disable rules. A ref that can't be resolved
+  // (vendor not connected, resource rejected) is skipped with a warning: the chat still works,
+  // just without that binding.
+  async #resolveAgentBindings(
+      clientUser: DurableObjectStub<UserDurableObject>,
+      definition: {bindings?: AgentBindingRef[]}): Promise<Record<string, WorkpieceId> | undefined> {
+    let refs = definition.bindings ?? [];
+    if (refs.length === 0) return undefined;
+
+    let result: Record<string, WorkpieceId> = Object.create(null);
+    for (let ref of refs) {
+      try {
+        let existing = [...this.storage.gatekeepers.list()].find(gk =>
+            gk.creationSpec?.type === "gatekeeper" &&
+            gk.creationSpec.vendorId.toLowerCase() === ref.vendorId.toLowerCase() &&
+            gk.creationSpec.resourceUrl === ref.resourceUrl);
+        if (existing) {
+          result[ref.name] = existing.id;
+          continue;
+        }
+
+        let accountId = await clientUser.findConnectedAccountByVendor(ref.vendorId);
+        if (accountId === null) {
+          this.logger.warn("agent binding skipped: vendor not connected", {
+            event: "chat.binding.agent.unconnected",
+            resourceTitle: ref.name, vendorId: ref.vendorId,
+          });
+          continue;
+        }
+        let {class: cls, vendorId, typeUrlPattern} =
+            await clientUser.getGatekeeperClassFor(accountId, ref.resourceUrl);
+        let client = await this.addGatekeeper(cls, {
+          type: "gatekeeper",
+          vendorId,
+          resourceUrl: ref.resourceUrl,
+          typeUrlPattern,
+        });
+        result[ref.name] = await client.getId();
+      } catch (error) {
+        this.logger.warn("agent binding skipped: failed to resolve", {
+          event: "chat.binding.agent.resolve.failed",
+          resourceTitle: ref.name, vendorId: ref.vendorId, path: ref.resourceUrl,
+          error,
+        });
+      }
+    }
+    return Object.keys(result).length > 0 ? result : undefined;
+  }
+
   async prepareChatBindings(chatId: number, chatMessages: AiChatMessage[])
       : Promise<SeedBindingInfo[]> {
     let context = this.getChatAgentContext(chatId);
@@ -4603,6 +4659,19 @@ class OverseerImpl implements AgentHooks {
           });
         }
         seed[fallbackBindingName(suggested || "RESOURCE", name => name in seed)] = id;
+      }
+
+      // Fold the agent definition's resolved bindings the same way, under the definition's own
+      // names. Spawned chats are excluded: the spawner's env is exclusive by design, and the
+      // spawner path never stores agentBindings anyway. Skips keep the ambient rules: an already
+      // seeded target keeps its first name; a taken name falls back to a numbered variant.
+      if (!context.spawnerConfig && context.agentBindings) {
+        for (let [name, id] of Object.entries(context.agentBindings)) {
+          if (seededTargets.has(id)) continue;
+          if (!this.storage.gatekeepers.get(id)) continue;  // disconnected since resolution
+          seed[fallbackBindingName(name, taken => taken in seed)] = id;
+          seededTargets.add(id);
+        }
       }
 
       context.bindings = seed;

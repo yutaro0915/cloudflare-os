@@ -15,7 +15,7 @@ import { AgentPreview } from "./AgentPreview";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const definition: AgentDefinition = {
-  version: 2,
+  version: 3,
   id: "draft-agent",
   name: "Draft Agent",
   modelId: "model-1",
