@@ -77,20 +77,18 @@ jobs:
           pnpm install
           pnpm --dir cloudflare-os install
 
+      # New workers refuse to deploy without their required secrets, so they are supplied
+      # at deploy time via DEPLOYMENT_SECRETS_FILE (deploy.mjs passes --secrets-file).
       - name: Deploy preview fleet
-        if: steps.gate.outputs.ready == 'true'
-        working-directory: starter
-        run: DEPLOYMENT_CONFIG=deployment.pr.jsonc pnpm deploy
-
-      - name: Set AI gateway secret on preview workshop
         if: steps.gate.outputs.ready == 'true'
         working-directory: starter
         env:
           CF_AI_GATEWAY_API_TOKEN: ${{ secrets.CF_AI_GATEWAY_API_TOKEN }}
         run: |
-          if [ -n "$CF_AI_GATEWAY_API_TOKEN" ]; then
-            printf '%s' "$CF_AI_GATEWAY_API_TOKEN" | pnpm exec wrangler secret put CF_AI_GATEWAY_API_TOKEN --name "cloudflare-os-workshop-pr-$PR"
-          fi
+          umask 177
+          printf 'CF_AI_GATEWAY_API_TOKEN=%s\n' "$CF_AI_GATEWAY_API_TOKEN" > /tmp/preview-secrets.env
+          DEPLOYMENT_CONFIG=deployment.pr.jsonc DEPLOYMENT_SECRETS_FILE=/tmp/preview-secrets.env pnpm deploy
+          rm -f /tmp/preview-secrets.env
 
       - name: Comment preview URL (sticky)
         if: steps.gate.outputs.ready == 'true'
