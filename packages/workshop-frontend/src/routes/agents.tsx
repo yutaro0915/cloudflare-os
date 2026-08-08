@@ -52,6 +52,13 @@ function draftFromDefinition(definition: AgentDefinition): AgentDraft {
   return {...definition, toolMode, toolNames}
 }
 
+// Switching modes discards the selection because it means something different per mode;
+// re-picking the active mode must stay a no-op so a misclick can't silently drop tools.
+export function draftWithToolMode(draft: AgentDraft, mode: ToolMode): AgentDraft {
+  if (mode === draft.toolMode) return draft
+  return {...draft, toolMode: mode, toolNames: []}
+}
+
 function definitionFromDraft(draft: AgentDraft): AgentDefinition {
   let tools: AgentDefinition['tools'] = null
   if (draft.toolMode === 'enabled') tools = {enabled: draft.toolNames}
@@ -374,7 +381,7 @@ function AgentsPage() {
                     <button
                       key={mode}
                       type="button"
-                      onClick={() => setDraft(previous => previous && {...previous, toolMode: mode, toolNames: []})}
+                      onClick={() => setDraft(previous => previous && draftWithToolMode(previous, mode))}
                       className={`inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-3 text-[12px] font-medium transition-colors ${draft.toolMode === mode ? 'border-kumo-brand bg-kumo-brand/10 text-kumo-brand' : 'border-kumo-line text-kumo-subtle hover:bg-kumo-tint'}`}
                     >
                       {draft.toolMode === mode && <Check size={12} weight="bold" />}
