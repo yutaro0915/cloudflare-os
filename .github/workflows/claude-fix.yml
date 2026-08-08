@@ -47,4 +47,4 @@ jobs:
                the verification you ran.
             6. Comment the PR link on the issue.
           claude_args: |
-            --allowedTools "Bash(git:*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh pr create:*),Bash(pnpm:*),Bash(node:*),Bash(npx:*)"
+            --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash(git:*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh pr create:*),Bash(pnpm:*),Bash(node:*),Bash(npx:*)"
