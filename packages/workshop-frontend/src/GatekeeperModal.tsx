@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Dialog, useKumoToastManager, type PortalContainer } from '@cloudflare/kumo'
+import { Dialog, type PortalContainer } from '@cloudflare/kumo'
 import {
   CaretDown,
   CaretLeft,
@@ -34,6 +34,7 @@ import { AccountChooser, AccountOption } from './gatekeeper-modal/AccountChooser
 import { matchesResourceUrl } from './resourceMatching'
 import { reportIssue } from './errorReporting'
 import { useSiteName } from './ServerConfigContext'
+import { useToasts } from './useToasts'
 
 export interface GatekeeperModalProps {
   open: boolean
@@ -178,7 +179,7 @@ export default function GatekeeperModal({
   initialVendorId, initialResourceUrl, initialResourceUrlPattern,
 }: GatekeeperModalProps) {
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
 
   const [selectedConnectionId, setSelectedConnectionId] = useState<ConnectionTypeId | null>(null)
   const [searchText, setSearchText] = useState('')

@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useKumoToastManager } from "@cloudflare/kumo";
 import { ChatInput } from "../ChatInterface";
 import MeshBackground from "../components/MeshBackground";
 import HomeTaskSuggestions from "../components/AppShell/HomeTaskSuggestions";
@@ -13,6 +12,7 @@ import {
   ChatAttachmentHandle,
   MessageFormatRef,
   SlashCommandRequest,
+  AgentDefinition,
 } from "@gadgets/workshop-shared/api";
 import {
   getStoredSelectedModel,
@@ -20,6 +20,7 @@ import {
 } from "../modelSelection";
 import { useDocumentTitle } from "../useDocumentTitle";
 import { homePromptFromSearch } from "../homePrompt";
+import { useToasts } from '../useToasts'
 
 type HomeSearch = { prompt?: string };
 
@@ -42,10 +43,12 @@ export function HomePageContent({ prompt }: HomeSearch) {
 
   const { authenticatedApi } = useAuthenticatedApi();
   const navigate = useNavigate();
-  const toasts = useKumoToastManager();
+  const toasts = useToasts();
 
   const [models, setModels] = useState<AiChatAuthorInfo[]>([]);
+  const [agents, setAgents] = useState<AgentDefinition[]>([]);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   // Bumped each time a task suggestion is picked; the composer re-seeds its text off the nonce.
   const [seed, setSeed] = useState<{ text: string; nonce: number }>({ text: "", nonce: 0 });
 
@@ -57,11 +60,14 @@ export function HomePageContent({ prompt }: HomeSearch) {
 
   useEffect(() => {
     let cancelled = false;
-    authenticatedApi
-      .listModels()
-      .then((list) => {
+    Promise.all([
+      authenticatedApi.listModels(),
+      authenticatedApi.listAgentDefinitions(),
+    ])
+      .then(([list, agentList]) => {
         if (cancelled) return;
         setModels(list);
+        setAgents(agentList);
         setSelectedModel(getStoredSelectedModel(list));
       })
       .catch((err) => {
@@ -74,8 +80,13 @@ export function HomePageContent({ prompt }: HomeSearch) {
   }, [authenticatedApi]);
 
   const handleModelChange = useCallback((value: string | null) => {
+    setSelectedAgent(null);
     setSelectedModel(value);
     persistSelectedModel(value);
+  }, []);
+
+  const handleAgentChange = useCallback((value: string | null) => {
+    setSelectedAgent(value);
   }, []);
 
   // Pre-create a provisional gadget as soon as the user starts interacting, so that navigation
@@ -103,13 +114,14 @@ export function HomePageContent({ prompt }: HomeSearch) {
       capsules?: CapsuleSpecifier[],
       attachments?: ChatAttachmentHandle[],
       formats?: MessageFormatRef[],
+      agentId?: string | null,
     ) => {
       try {
         ensureProvisionalGadget();
         const overseer = provisionalOverseerRef.current!.stub;
         // Pipeline both independent calls in one batch, but settle both before releasing the stub.
         const [chat, {id}] = await Promise.all([
-          overseer.newChat(message, modelId, capsules, attachments, formats),
+          overseer.newChat(message, modelId, capsules, attachments, formats, agentId),
           overseer.getMetadata(),
         ]);
         provisionalOverseerRef.current?.stub[Symbol.dispose]();
@@ -181,6 +193,9 @@ export function HomePageContent({ prompt }: HomeSearch) {
           models={models}
           selectedModel={selectedModel}
           onModelChange={handleModelChange}
+          agents={agents}
+          selectedAgent={selectedAgent}
+          onAgentChange={handleAgentChange}
           newChat
           offerFormats
           autoFocus

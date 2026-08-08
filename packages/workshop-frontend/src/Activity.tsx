@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Switch, useKumoToastManager } from '@cloudflare/kumo'
+import { Switch } from '@cloudflare/kumo'
 import { CaretRight, Check, Eye, Lightning, ShieldCheck } from '@phosphor-icons/react'
 import { RpcStub } from 'capnweb'
 import { ActionLogEntry, Overseer } from '@gadgets/workshop-shared/api'
@@ -17,6 +17,7 @@ import { useVendorBranding } from './useVendorBranding'
 import { useResolveAction } from './useResolveAction'
 import { safeExternalUrl } from './utils/safeExternalUrl'
 import AutoApproveConfirmDialog from './components/AutoApproveConfirmDialog'
+import { useToasts } from './useToasts'
 
 export type ActivityView = 'review' | 'history' | 'auto'
 
@@ -128,7 +129,7 @@ export default function Activity({
     actionKind: ActionKind
     actionLabel: string
   } | null>(null)
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
 
   const { pendingActions, historyGroups, historyTotal, historyShown } = useMemo(() => {
     const records = [...actionsById.values()]

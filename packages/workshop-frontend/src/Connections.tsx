@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Dialog, Tooltip, useKumoToastManager } from '@cloudflare/kumo'
+import { Dialog, Tooltip } from '@cloudflare/kumo'
 import {
   Pencil,
   Trash,
@@ -21,6 +21,7 @@ import {
   loadBindingCardData,
 } from './components/BlueprintBindingCard'
 import { reportIssue } from './errorReporting'
+import { useToasts } from './useToasts'
 
 interface ConnectionsProps {
   overseer: RpcStub<Overseer>
@@ -51,7 +52,7 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
   const [deleteHookTarget, setDeleteHookTarget] = useState<{ id: number; title: string } | null>(null)
   const [togglingHooks, setTogglingHooks] = useState<Set<number>>(new Set())
   const [annotationTarget, setAnnotationTarget] = useState<GadgetBindingInfo | null>(null)
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
 
   const loadGatekeepers = async () => {
     try {

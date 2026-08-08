@@ -1,7 +1,7 @@
 import { useCallback, useRef, type Dispatch, type SetStateAction } from 'react'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import type { RpcStub } from 'capnweb'
 import type { ActionState, Overseer } from '@gadgets/workshop-shared/api'
+import { useToasts } from './useToasts'
 
 type ActionDecision = 'approve' | 'deny'
 
@@ -10,7 +10,7 @@ export function useResolveAction(
   setProcessing: Dispatch<SetStateAction<Set<number>>>,
   onResolved?: (actionId: number, state: Extract<ActionState, 'approved' | 'rejected'>) => void,
 ) {
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
   const onResolvedRef = useRef(onResolved)
   onResolvedRef.current = onResolved
 

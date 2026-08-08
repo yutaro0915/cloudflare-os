@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import { RpcTarget } from 'capnweb'
 import { useAuthenticatedApi } from './AuthContext'
 import {
@@ -34,6 +33,7 @@ import { useTheme } from './ThemeContext'
 import { useSiteName } from './ServerConfigContext'
 import SiteLogo from './components/SiteLogo'
 import { useDocumentTitle } from './useDocumentTitle'
+import { useToasts } from './useToasts'
 
 // ─── constants ──────────────────────────────────────────────────────────────────
 
@@ -66,7 +66,7 @@ export default function OnboardingWizard({
 }) {
   const { authenticatedApi, currentUser } = useAuthenticatedApi()
   const { resolvedThemeMode } = useTheme()
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
   const siteName = useSiteName()
   useDocumentTitle('Setup')
 

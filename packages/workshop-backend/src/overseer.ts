@@ -1,6 +1,6 @@
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
-import { Overseer, AgentDefinition, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName } from '@gadgets/workshop-shared/api';
+import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, type AgentDefinition } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, HookInitiator, ResourceDescription, ApprovalQueue, ActionDescription, ObservationAuthorizer, ObservationDescription, VendorDescription, SupportedResource, resolveRequestedResource, HookController, HookDescription, AGENT_CATALOG_MAX_ENTRIES, ActionKind } from "@gadgets/workshop-shared/gatekeeper";
 import {
   DurableObject, WorkerEntrypoint, RpcStub as NativeRpcStub,
@@ -45,7 +45,6 @@ import {
   validateChatAttachmentUpload,
 } from "./chat-attachment-validation";
 import { renderGadgetPdf } from "./browser-export";
-import { validateAgentDefinition } from "./agent-definition";
 
 const logger = createWorkshopLogger("workshop.overseer");
 export const AGENT_RUNNING_ERROR_MESSAGE = "Agent is running, wait for it to finish.";
@@ -687,8 +686,8 @@ function makeOverseerStorage(storage: DurableObjectStorage) {
       // The workspace title. (Each chat, gatekeeper, and gadget has its own title, elsewhere.)
       title: "Untitled Workspace",
 
-      // Workspace-level declarative agent behavior. Null preserves the legacy defaults.
-      agentDefinition: <AgentDefinition | null>null,
+      // True only for the authenticated user's hidden Agent definition preview runtime.
+      agentPreview: false,
 
       // If present, this gadget was migrated from version zero, when a workspace had only one
       // gadget. Many stored records that normally contain a `gadgetId` might be missing it; they
@@ -3450,6 +3449,12 @@ class OverseerImpl implements AgentHooks {
         meta.activeAgent = userMeta.aiModel.profile;
       }
       this.storage.chatMeta.put(meta);
+      if (userMeta.agentDefinition) {
+        this.storage.chatContext.put({
+          chatId,
+          agentDefinition: userMeta.agentDefinition,
+        });
+      }
 
       let promptSequence = this.#commitPreparedChatMessage(
           chatId, timestamp, userMeta.profile, prepared, capsules, canonicalAttachments, formats);
@@ -5559,19 +5564,6 @@ class OverseerImpl implements AgentHooks {
     }
   }
 
-  async getAgentDefinition(): Promise<AgentDefinition | null> {
-    return this.storage.agentDefinition.get();
-  }
-
-  async saveAgentDefinition(definition: AgentDefinition): Promise<void> {
-    validateAgentDefinition(definition);
-    this.storage.agentDefinition.put(definition);
-  }
-
-  async resetAgentDefinition(): Promise<void> {
-    this.storage.agentDefinition.put(null);
-  }
-
   async listConnectableVendors(): Promise<{id: string, displayName: string}[]> {
     try {
       let vendors = await this.#listGatekeeperVendorsCached();
@@ -6356,7 +6348,8 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   async open(userId: string, profileId: string,
              notifyClosed: NativeRpcStub<() => void>,
              shareKey?: string,
-             configureObservers?: RpcStub<ObserverConfigCallback>): Promise<Overseer> {
+             configureObservers?: RpcStub<ObserverConfigCallback>,
+             agentPreview = false): Promise<Overseer> {
     let firstOpen = !this.impl.ownerId;
     if (firstOpen) {
       // This Overseer hasn't been initialized yet.
@@ -6381,9 +6374,14 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
         this.impl.ownerId = userId;
 
         this.impl.storage.ownerId.put(userId);
+        this.impl.storage.agentPreview.put(agentPreview);
 
         this.#initializeEmptyCodeSnapshot();
       });
+    }
+
+    if ((this.impl.storage.agentPreview?.get() ?? false) !== agentPreview) {
+      throw new Error("Agent preview runtime mode mismatch.");
     }
 
     let isOwner = (userId == this.impl.ownerId);
@@ -6491,6 +6489,19 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     return new OverseerClientInterface(
         this.impl, owner, clientUser, profileId, userId, isOwner, notifyClosed.dup(),
         ensureCapsules);
+  }
+
+  // Called only through AuthenticatedApiImpl. Keeping the draft definition off the returned
+  // Overseer capability avoids widening the normal chat RPC surface for preview-only data.
+  async startAgentPreviewChat(userId: string, initialMessage: string,
+                              definition: AgentDefinition): Promise<number> {
+    if (this.impl.ownerId !== userId || !this.impl.storage.agentPreview?.get()) {
+      throw new Error("Agent preview runtime is not open for this user.");
+    }
+
+    let owner = this.impl.users.get(this.impl.users.idFromString(userId));
+    let userMeta = await owner.getPreviewChatContext(definition);
+    return this.impl.newChat(owner, userMeta, initialMessage);
   }
 
   #getExternalChat(externalChatKey: string): ExternalChatRecord | undefined {
@@ -7181,18 +7192,6 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
       result.owner = await this.owner.whoami();
     }
     return result;
-  }
-
-  async getAgentDefinition(): Promise<AgentDefinition | null> {
-    return this.impl.getAgentDefinition();
-  }
-
-  async saveAgentDefinition(definition: AgentDefinition): Promise<void> {
-    return this.impl.saveAgentDefinition(definition);
-  }
-
-  async resetAgentDefinition(): Promise<void> {
-    return this.impl.resetAgentDefinition();
   }
 
   async subscribeToMetadata(
@@ -8207,8 +8206,8 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
   async newChat(initialMessage: string | SlashCommandRequest, chosenModelId: string | null,
                 capsules?: CapsuleSpecifier[], attachments?: ChatAttachmentHandle[],
-                formats?: MessageFormatRef[]): Promise<number> {
-    let userMeta = await this.clientUser.getChatContext(chosenModelId);
+                formats?: MessageFormatRef[], agentId?: string | null): Promise<number> {
+    let userMeta = await this.clientUser.getChatContext(chosenModelId, agentId);
     return this.impl.newChat(this.clientUser, userMeta, initialMessage, capsules, attachments,
                              undefined, undefined, formats);
   }
@@ -8895,9 +8894,6 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
   // --- Denied methods (build-only) ---
 
   async setTitle(_title: string): Promise<void> { this.#deny(); }
-  async getAgentDefinition(): Promise<AgentDefinition | null> { this.#deny(); }
-  async saveAgentDefinition(_definition: AgentDefinition): Promise<void> { this.#deny(); }
-  async resetAgentDefinition(): Promise<void> { this.#deny(); }
   async setPinned(_pinned: boolean): Promise<void> { this.#deny(); }
   async deleteSelf(): Promise<void> { this.#deny(); }
   async createGadget(_title: string): Promise<RpcStub<GadgetClient>> { this.#deny(); }
@@ -8955,7 +8951,8 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
     this.#deny();
   }
   async newChat(_initialMessage: string | SlashCommandRequest, _modelId: string | null,
-                 _capsules?: CapsuleSpecifier[], _attachments?: ChatAttachmentHandle[]): Promise<number> {
+                 _capsules?: CapsuleSpecifier[], _attachments?: ChatAttachmentHandle[],
+                 _formats?: MessageFormatRef[], _agentId?: string | null): Promise<number> {
     this.#deny();
   }
   async sendChatMessage(_chatId: number, _message: string | SlashCommandRequest,

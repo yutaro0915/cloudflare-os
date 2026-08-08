@@ -315,6 +315,27 @@ export interface AuthenticatedApi extends RpcTarget {
   // Deletes a configured model.
   deleteModel(id: string): Promise<void>;
 
+  /** List the user's custom agent definitions. */
+  listAgentDefinitions(): Promise<AgentDefinition[]>;
+
+  /** Validate and upsert a user-owned custom agent definition. */
+  saveAgentDefinition(definition: AgentDefinition): Promise<void>;
+
+  /** Delete a user-owned custom agent definition. */
+  deleteAgentDefinition(id: string): Promise<void>;
+
+  /** List the user's reusable Agent Skill definitions. */
+  listSkillDefinitions(): Promise<SkillDefinition[]>;
+
+  /** Validate SKILL.md, upsert it under the stable ID, and return derived metadata. */
+  saveSkillDefinition(id: string, markdown: string): Promise<SkillDefinition>;
+
+  /** Validate SKILL.md without saving it and return its derived metadata. */
+  validateSkillMarkdown(markdown: string): Promise<SkillMetadata>;
+
+  /** Delete a reusable Agent Skill definition which is not referenced by an agent. */
+  deleteSkillDefinition(id: string): Promise<void>;
+
   // Set the model to use for simple quick tasks, like generating chat titles. Set null to
   // disable quick model use (e.g. chats will be titled "New Chat").
   setQuickModel(id: string | null): Promise<void>;
@@ -394,6 +415,15 @@ export interface AuthenticatedApi extends RpcTarget {
   //
   // TODO(multi-gadget): This should be renamed to newWorkspace().
   newGadget(): Promise<RpcStub<Overseer>>;
+
+  // Open the authenticated user's hidden Agent preview runtime. It is backed by the same
+  // Overseer/agent loop as ordinary chats but never appears in workspace or output listings.
+  openAgentPreview(): Promise<RpcStub<Overseer>>;
+
+  // Start a chat in the hidden Agent preview runtime from an unsaved definition. The definition
+  // crosses only the authenticated API boundary; the returned preview Overseer remains the same
+  // restricted chat capability used for subsequent messages.
+  startAgentPreviewChat(initialMessage: string, definition: AgentDefinition): Promise<number>;
 
   // List metadata about all the user's Gadgets. Used to display the front-page listing.
   //
@@ -919,22 +949,66 @@ export type CloudflareAccountOption = {
 // Supported AI providers.
 export type AiModelProvider = "openai" | "anthropic" | "google" | "cloudflare" | "ollama" | "deepseek";
 
-/** A workspace's declarative agent configuration. */
+/** Tool names which a custom agent may allow or deny. */
+export const CUSTOM_AGENT_TOOL_NAMES = [
+  "readFile",
+  "writeFile",
+  "editFile",
+  "webFetch",
+  "observeUserChanges",
+  "describeBinding",
+  "setGadgetBinding",
+  "createGadget",
+  "listBlueprints",
+  "executeCode",
+  "listConnectableResources",
+  "requestConnection",
+  "giveUp",
+] as const;
+
+/** A user-owned custom agent available when starting a conversation. */
 export interface AgentDefinition {
   /** Schema version for the stored definition. */
-  version: 1;
+  version: 2;
 
-  /** Prompt fragments appended to the regular agent's dynamic system-prompt slot, in order. */
-  prompts?: string[];
+  /** Stable user-scoped identifier. */
+  id: string;
 
-  /** Context collection or other skill references reserved for later expansion. */
-  skills?: string[];
+  /** Display name shown in the agent picker. */
+  name: string;
 
-  /** Optional model selection metadata. Omit or set null to keep the current model behavior. */
-  model?: { provider: AiModelProvider; model: string } | null;
+  /** ID of the configured model this agent uses. */
+  modelId: string;
+
+  /** Complete AGENTS.md contents appended to the regular agent's dynamic system-prompt slot. */
+  agentsMd: string;
+
+  /** IDs of reusable Skill definitions available to this agent. */
+  skillIds: string[];
 
   /** Tool allow/deny rules. A non-empty enabled list takes precedence over disabled. */
-  tools?: { enabled?: string[]; disabled?: string[] } | null;
+  tools: { enabled?: string[]; disabled?: string[] } | null;
+}
+
+/** Metadata derived from a SKILL.md frontmatter block. */
+export interface SkillMetadata {
+  /** Skill name used for discovery and explicit invocation. */
+  name: string;
+
+  /** Description the model uses to decide whether to load the Skill. */
+  description: string;
+}
+
+/** A reusable Agent Skill stored independently from Agent definitions. */
+export interface SkillDefinition extends SkillMetadata {
+  /** Schema version for the stored Skill definition. */
+  version: 1;
+
+  /** Stable user-scoped identifier. */
+  id: string;
+
+  /** Complete SKILL.md contents, including YAML frontmatter and Markdown instructions. */
+  markdown: string;
 }
 
 // Information about the AI gateway configuration. Returned by `AuthenticatedApi.getAiConfig()`.
@@ -1316,15 +1390,6 @@ export interface Overseer extends RpcTarget {
   // Get metadata describing this workspace.
   getMetadata(): Promise<GadgetMetadata>;
 
-  /** Return this workspace's agent definition, or null when it uses the default behavior. */
-  getAgentDefinition(): Promise<AgentDefinition | null>;
-
-  /** Validate and persist this workspace's agent definition. */
-  saveAgentDefinition(definition: AgentDefinition): Promise<void>;
-
-  /** Remove this workspace's agent definition and restore the default behavior. */
-  resetAgentDefinition(): Promise<void>;
-
   // Get metadata describing this workspace and subscribe to changes.
   //
   // `callback` will be called once immediately with the current metadata, then again any time it
@@ -1533,9 +1598,11 @@ export interface Overseer extends RpcTarget {
   // `formats` records where the message names one of the deployment's standard output formats, so
   // the transcript can draw it as a chip. Display only -- what the agent reads is the noun, which
   // is already in the text.
+  // `agentId` selects a saved custom Agent. Its definition is snapshotted into the chat, so later
+  // edits affect only new chats.
   newChat(initialMessage: string | SlashCommandRequest, modelId: string | null,
           capsules?: CapsuleSpecifier[], attachments?: ChatAttachmentHandle[],
-          formats?: MessageFormatRef[]): Promise<number>;
+          formats?: MessageFormatRef[], agentId?: string | null): Promise<number>;
 
   // Send a message to the chat from this client. Sending a message causes the LLM to start
   // running if it isn't already.
@@ -2148,6 +2215,11 @@ export type AiToolCall = {
   input: {
     error: string;
   };
+} | {
+  // Harness infrastructure tool for progressive disclosure of the chat's Skill snapshot.
+  toolName: "readSkill";
+  input: {id: string};
+  output?: string;
 } | {
   toolName: "webFetch";
   input: {

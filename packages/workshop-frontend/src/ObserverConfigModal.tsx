@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Dialog, Select, Loader, Text, useKumoToastManager } from '@cloudflare/kumo'
+import { Dialog, Select, Loader, Text } from '@cloudflare/kumo'
 import { Warning, Plus, ArrowClockwise, CheckCircle } from '@phosphor-icons/react'
 import { RpcStub, RpcTarget } from 'capnweb'
 import {
@@ -11,6 +11,7 @@ import {
 import { AccountDescription, VendorDescription, SupportedResource } from '@gadgets/workshop-shared/gatekeeper'
 import { WorkshopButton } from './components/WorkshopControls'
 import Avatar from './components/Avatar'
+import { useToasts } from './useToasts'
 
 // Shown when a non-owner opens a shared Gadget that reads data through one or more gatekeeper
 // bindings, and they haven't yet chosen which of their own connected accounts to use for each one.
@@ -49,7 +50,7 @@ export default function ObserverConfigModal({
   onConfirm,
   onCancel,
 }: ObserverConfigModalProps) {
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
 
   const [accounts, setAccounts] = useState<Map<number, AccountInfo>>(new Map())
   const [ready, setReady] = useState(false)

@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as AgentsRouteImport } from './routes/agents'
 import { Route as BlueprintsRouteImport } from './routes/blueprints'
 import { Route as ContextRouteImport } from './routes/context'
 import { Route as ExploreRouteImport } from './routes/explore'
@@ -19,6 +20,8 @@ import { Route as OutputsRouteImport } from './routes/outputs'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as ProvidersRouteImport } from './routes/providers'
 import { Route as SignupRouteImport } from './routes/signup'
+import { Route as SkillsRouteImport } from './routes/skills'
+import { Route as ToolsRouteImport } from './routes/tools'
 import { Route as WorkspacesRouteImport } from './routes/workspaces'
 import { Route as BlueprintIdRouteImport } from './routes/blueprint.$id'
 import { Route as GadgetIdRouteImport } from './routes/gadget.$id'
@@ -33,6 +36,11 @@ const IndexRoute = IndexRouteImport.update({
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
   path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentsRoute = AgentsRouteImport.update({
+  id: '/agents',
+  path: '/agents',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BlueprintsRoute = BlueprintsRouteImport.update({
@@ -75,6 +83,16 @@ const SignupRoute = SignupRouteImport.update({
   path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SkillsRoute = SkillsRouteImport.update({
+  id: '/skills',
+  path: '/skills',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ToolsRoute = ToolsRouteImport.update({
+  id: '/tools',
+  path: '/tools',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WorkspacesRoute = WorkspacesRouteImport.update({
   id: '/workspaces',
   path: '/workspaces',
@@ -104,6 +122,7 @@ const WorkspaceIdRoute = WorkspaceIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/agents': typeof AgentsRoute
   '/blueprints': typeof BlueprintsRoute
   '/context': typeof ContextRoute
   '/explore': typeof ExploreRoute
@@ -112,6 +131,8 @@ export interface FileRoutesByFullPath {
   '/profile': typeof ProfileRoute
   '/providers': typeof ProvidersRoute
   '/signup': typeof SignupRoute
+  '/skills': typeof SkillsRoute
+  '/tools': typeof ToolsRoute
   '/workspaces': typeof WorkspacesRoute
   '/blueprint/$id': typeof BlueprintIdRoute
   '/gadget/$id': typeof GadgetIdRoute
@@ -121,6 +142,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/agents': typeof AgentsRoute
   '/blueprints': typeof BlueprintsRoute
   '/context': typeof ContextRoute
   '/explore': typeof ExploreRoute
@@ -129,6 +151,8 @@ export interface FileRoutesByTo {
   '/profile': typeof ProfileRoute
   '/providers': typeof ProvidersRoute
   '/signup': typeof SignupRoute
+  '/skills': typeof SkillsRoute
+  '/tools': typeof ToolsRoute
   '/workspaces': typeof WorkspacesRoute
   '/blueprint/$id': typeof BlueprintIdRoute
   '/gadget/$id': typeof GadgetIdRoute
@@ -139,6 +163,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/agents': typeof AgentsRoute
   '/blueprints': typeof BlueprintsRoute
   '/context': typeof ContextRoute
   '/explore': typeof ExploreRoute
@@ -147,6 +172,8 @@ export interface FileRoutesById {
   '/profile': typeof ProfileRoute
   '/providers': typeof ProvidersRoute
   '/signup': typeof SignupRoute
+  '/skills': typeof SkillsRoute
+  '/tools': typeof ToolsRoute
   '/workspaces': typeof WorkspacesRoute
   '/blueprint/$id': typeof BlueprintIdRoute
   '/gadget/$id': typeof GadgetIdRoute
@@ -158,6 +185,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
+    | '/agents'
     | '/blueprints'
     | '/context'
     | '/explore'
@@ -166,6 +194,8 @@ export interface FileRouteTypes {
     | '/profile'
     | '/providers'
     | '/signup'
+    | '/skills'
+    | '/tools'
     | '/workspaces'
     | '/blueprint/$id'
     | '/gadget/$id'
@@ -175,6 +205,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/admin'
+    | '/agents'
     | '/blueprints'
     | '/context'
     | '/explore'
@@ -183,6 +214,8 @@ export interface FileRouteTypes {
     | '/profile'
     | '/providers'
     | '/signup'
+    | '/skills'
+    | '/tools'
     | '/workspaces'
     | '/blueprint/$id'
     | '/gadget/$id'
@@ -192,6 +225,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/admin'
+    | '/agents'
     | '/blueprints'
     | '/context'
     | '/explore'
@@ -200,6 +234,8 @@ export interface FileRouteTypes {
     | '/profile'
     | '/providers'
     | '/signup'
+    | '/skills'
+    | '/tools'
     | '/workspaces'
     | '/blueprint/$id'
     | '/gadget/$id'
@@ -210,6 +246,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRoute
+  AgentsRoute: typeof AgentsRoute
   BlueprintsRoute: typeof BlueprintsRoute
   ContextRoute: typeof ContextRoute
   ExploreRoute: typeof ExploreRoute
@@ -218,6 +255,8 @@ export interface RootRouteChildren {
   ProfileRoute: typeof ProfileRoute
   ProvidersRoute: typeof ProvidersRoute
   SignupRoute: typeof SignupRoute
+  SkillsRoute: typeof SkillsRoute
+  ToolsRoute: typeof ToolsRoute
   WorkspacesRoute: typeof WorkspacesRoute
   BlueprintIdRoute: typeof BlueprintIdRoute
   GadgetIdRoute: typeof GadgetIdRoute
@@ -239,6 +278,13 @@ declare module '@tanstack/react-router' {
       path: '/admin'
       fullPath: '/admin'
       preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agents': {
+      id: '/agents'
+      path: '/agents'
+      fullPath: '/agents'
+      preLoaderRoute: typeof AgentsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/blueprints': {
@@ -297,6 +343,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/skills': {
+      id: '/skills'
+      path: '/skills'
+      fullPath: '/skills'
+      preLoaderRoute: typeof SkillsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/tools': {
+      id: '/tools'
+      path: '/tools'
+      fullPath: '/tools'
+      preLoaderRoute: typeof ToolsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/workspaces': {
       id: '/workspaces'
       path: '/workspaces'
@@ -338,6 +398,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
+  AgentsRoute: AgentsRoute,
   BlueprintsRoute: BlueprintsRoute,
   ContextRoute: ContextRoute,
   ExploreRoute: ExploreRoute,
@@ -346,6 +407,8 @@ const rootRouteChildren: RootRouteChildren = {
   ProfileRoute: ProfileRoute,
   ProvidersRoute: ProvidersRoute,
   SignupRoute: SignupRoute,
+  SkillsRoute: SkillsRoute,
+  ToolsRoute: ToolsRoute,
   WorkspacesRoute: WorkspacesRoute,
   BlueprintIdRoute: BlueprintIdRoute,
   GadgetIdRoute: GadgetIdRoute,

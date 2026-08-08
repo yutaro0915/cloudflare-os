@@ -1,4 +1,4 @@
-import { AiChatMessage, AiChatAuthorInfo, AiToolCall, AiChatMessageBody, AgentSpawnerConfig, AiChatStreamEvent, BlueprintOutput, WorkpieceId, type AgentDefinition, type AiModelConfig, isTextLikeAttachmentMimeType, validateBindingName } from '@gadgets/workshop-shared/api';
+import { AiChatMessage, AiChatAuthorInfo, AiToolCall, AiChatMessageBody, AgentSpawnerConfig, AiChatStreamEvent, BlueprintOutput, WorkpieceId, type AiModelConfig, isTextLikeAttachmentMimeType, validateBindingName } from '@gadgets/workshop-shared/api';
 import { PDF_MIME_TYPE, modelApiSupportsPdfAttachments } from './chat-attachment-pdf';
 import { AgentCatalog, ObservationDescription } from '@gadgets/workshop-shared/gatekeeper';
 import { createWorkshopLogger } from "./observability";
@@ -18,7 +18,7 @@ import { formatInstanceInstructions } from "./admin-config";
 import type { AiGatewayLogRoute } from "./ai-gateway";
 import { AgentTurnError, completeText, httpStatusFromError, zeroUsage } from "./ai-invoke";
 import type { ModelHandle } from "./ai-models";
-import { appendAgentDefinitionPrompts, filterAgentTools } from "./agent-definition";
+import { appendAgentDefinitionInstructions, createReadSkillTool, filterAgentTools, type AgentDefinitionSnapshot } from "./agent-definition";
 import {
   buildCompactionState, buildSummaryPrompt, COMPACTION_SYSTEM_PROMPT, estimateProjectionTokens,
   findCompactionBoundary, findProtectedFromSequence, getModelTokenLimits, isCompactionTurn,
@@ -32,6 +32,10 @@ const logger = createWorkshopLogger("workshop.agent");
 export type AiChatAgentContext = {
   // Chat ID, corresponds to `chatMeta`.
   chatId: number;
+
+  // Custom agent definition snapshotted when this chat was created. Later edits to the user's
+  // saved definition affect only new chats.
+  agentDefinition?: AgentDefinitionSnapshot;
 
   // If present, this chat was spawned using a spawner, and this was the spawner config at the
   // time.
@@ -320,9 +324,6 @@ export interface AgentHooks {
   // Deployment-wide, admin-authored instructions to append to the agent's system prompt. Returns
   // "" when none are set. Read on each turn so admin edits take effect promptly.
   getInstanceInstructions(): Promise<string>;
-
-  // Read the workspace-level declarative agent definition applied to this turn.
-  getAgentDefinition(): Promise<AgentDefinition | null>;
 
   // Connection-request hooks for the agent.
   //
@@ -1674,6 +1675,12 @@ export async function runAgent(
                 case "giveUp":
                   toolOutput = {text: jsonToolResultText({rejected: true})};
                   break;
+                case "readSkill":
+                  if (toolCall.output === undefined) {
+                    throw new Error("readSkill tool call in log is missing output");
+                  }
+                  toolOutput = {text: toolCall.output};
+                  break;
                 case "webFetch":
                   if (toolCall.output === undefined) {
                     throw new Error("webFetch tool call in log is missing output");
@@ -2047,7 +2054,7 @@ export async function runAgent(
   };
 
   let agentContext = hooks.getChatAgentContext(chatId);
-  let agentDefinition = await hooks.getAgentDefinition();
+  let agentDefinition = agentContext.agentDefinition ?? null;
   let emitStreamEvent = (event: AiChatStreamEvent) => {
     hooks.emitChatStreamEvent(chatId, event);
   };
@@ -2204,7 +2211,7 @@ export async function runAgent(
     ];
   }
 
-  systemPromptSlots[1] = appendAgentDefinitionPrompts(
+  systemPromptSlots[1] = appendAgentDefinitionInstructions(
       systemPromptSlots[1], agentDefinition, agentContext.spawnerConfig !== undefined);
   let systemPrompt = `${systemPromptSlots[0]}\n\n${systemPromptSlots[1]}`;
 
@@ -2847,7 +2854,10 @@ export async function runAgent(
     };
   }
 
-  tools = filterAgentTools(tools, agentDefinition?.tools);
+  tools = filterAgentTools(tools, agentDefinition?.tools ?? null);
+  if (!agentContext.spawnerConfig && agentDefinition?.skills.length) {
+    tools.readSkill = defineTool(createReadSkillTool(agentDefinition.skills));
+  }
 
   let toolList = Object.values(tools);
 

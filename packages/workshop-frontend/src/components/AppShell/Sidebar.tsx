@@ -6,9 +6,12 @@ import {
   Hexagon,
   House,
   MagnifyingGlass,
+  Robot,
   SidebarSimple,
+  Sparkle,
   SquaresFour,
   Stack,
+  Wrench,
 } from '@phosphor-icons/react'
 import { useSiteName } from '../../ServerConfigContext'
 import SiteLogo from '../SiteLogo'
@@ -182,6 +185,24 @@ export default function Sidebar({
               to="/explore"
               label="Explore"
               icon={<Compass size={14} weight="regular" />}
+              collapsed={collapsed}
+            />
+            <SidebarItem
+              to="/agents"
+              label="Agents"
+              icon={<Robot size={14} weight="regular" />}
+              collapsed={collapsed}
+            />
+            <SidebarItem
+              to="/skills"
+              label="Skills"
+              icon={<Sparkle size={14} weight="regular" />}
+              collapsed={collapsed}
+            />
+            <SidebarItem
+              to="/tools"
+              label="Tools"
+              icon={<Wrench size={14} weight="regular" />}
               collapsed={collapsed}
             />
           </nav>

@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Dialog, Button, Input, Select, SensitiveInput, Collapsible, useKumoToastManager } from '@cloudflare/kumo'
+import { Dialog, Button, Input, Select, SensitiveInput, Collapsible } from '@cloudflare/kumo'
 import { AiChatAuthorInfo, AiModelConfig, AiModelProvider, AiGatewayInfo, SUGGESTED_MODELS } from '@gadgets/workshop-shared/api'
 import { RpcStub } from 'capnweb'
 import { AuthenticatedApi } from '@gadgets/workshop-shared/api'
+import { useToasts } from './useToasts'
 
 interface AddModelModalProps {
   visible: boolean
@@ -92,7 +93,7 @@ function buildOptions(gatewayMode: boolean, enabledProviders: Set<string> | null
 }
 
 export default function AddModelModal({ visible, onCancel, onSuccess, authenticatedApi, aiConfig }: AddModelModalProps) {
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
 
   const [loading, setLoading] = useState(false)
   const [selection, setSelection] = useState<SelectionType | null>(null)

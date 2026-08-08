@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
-import { Checkbox, Dialog, DropdownMenu, useKumoToastManager } from '@cloudflare/kumo'
+import { Checkbox, Dialog, DropdownMenu } from '@cloudflare/kumo'
 import type { PortalContainer } from '@cloudflare/kumo'
 import { CaretDown, Check, Copy, Link, PencilSimple, ShieldCheck, ShieldWarning, Trash, UserPlus, X } from '@phosphor-icons/react'
 import { RpcStub } from 'capnweb'
@@ -17,6 +17,7 @@ import {
 import { WorkshopButton, WorkshopIconButton } from './components/WorkshopControls'
 import { PersonAvatar } from './components/PersonAvatar'
 import { copyToClipboard } from './clipboard'
+import { useToasts } from './useToasts'
 
 type CollaboratorRow =
   | { kind: 'owner'; profile: AiChatAuthorInfo }
@@ -294,7 +295,7 @@ function sameRequirements(
 }
 
 export default function ShareModal({ open, onClose, overseer, metadata, currentUser, authenticatedApi }: Props) {
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
   const [collaborators, setCollaborators] = useState<CollaboratorInfo[]>([])
   const [shareLinks, setShareLinks] = useState<ShareLinkInfo[]>([])
   const [addUsername, setAddUsername] = useState('')

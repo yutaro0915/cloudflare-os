@@ -750,6 +750,9 @@ importers:
       jose:
         specifier: ^6.2.5
         version: 6.2.5
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
       yjs:
         specifier: ^13.6.31
         version: 13.6.31
@@ -799,9 +802,6 @@ importers:
       hash-wasm:
         specifier: ^4.12.0
         version: 4.12.0
-      jsonc-parser:
-        specifier: ^3.3.1
-        version: 3.3.1
       monaco-editor:
         specifier: ^0.52.2
         version: 0.52.2

@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type PointerEvent as ReactPointerEvent } from 'react'
 import { useParams, useNavigate, useSearch, Link } from '@tanstack/react-router'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import {
   ShareNetwork,
   Pencil,
@@ -11,7 +10,6 @@ import {
   Trash,
   ArrowsOutSimple,
   Pulse,
-  Robot,
   type Icon,
 } from '@phosphor-icons/react'
 import { RpcStub, RpcTarget } from 'capnweb'
@@ -56,7 +54,7 @@ import WorkspaceOpenErrorPage from './components/WorkspaceOpenErrorPage'
 import { useWorkspaceOpen } from './useWorkspaceOpen'
 import { reportIssue } from './errorReporting'
 import GadgetExportMenu from './GadgetExportMenu'
-import AgentDefinitionEditor from './AgentDefinitionEditor'
+import { useToasts } from './useToasts'
 
 const NO_GADGETS: ReadonlySet<WorkpieceId> = new Set()
 
@@ -154,7 +152,6 @@ type WorkspaceView =
   // `appId` is absent only while lazily migrating the legacy "open" value.
   | { mode: 'app'; appId?: WorkpieceId }
   | { mode: 'activity' }
-  | { mode: 'agent' }
 
 function formatHeaderCost(cost: number) {
   if (cost === 0) return '$0'
@@ -430,7 +427,7 @@ export default function GadgetEditor() {
   const urlWorkpieceId = workpieceParam !== undefined ? workpieceParam : null
 
   // ── toasts ─────────────────────────────────────────────────────────────────────
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
 
   // ── core state ──────────────────────────────────────────────────────────────
   // The workspace's workpiece list (gadget-type workpieces only in v1), kept live via
@@ -767,14 +764,13 @@ export default function GadgetEditor() {
     && visibleGadgets.length <= 1
   const hasAnyApps = allGadgets.length > 0
   const showingActivity = workspaceView?.mode === 'activity'
-  const showingAgent = workspaceView?.mode === 'agent'
   const showFullEditor = layoutModeReady && (
-    showingActivity || showingAgent ||
+    showingActivity ||
     (hasAnyApps && (workspaceView === null ? !simpleMode : workspaceView.mode === 'app'))
   )
   const showOutputRail = layoutModeReady && hasAnyApps && !showFullEditor
   const paneShowsActivity = showingActivity || activityClosing
-  const paneShowsWorkspace = paneShowsActivity || showingAgent
+  const paneShowsWorkspace = paneShowsActivity
   useEffect(() => {
     if (!activityClosing) return
     const timeout = window.setTimeout(() => setActivityClosing(false), WORKSPACE_TRANSITION_MS)
@@ -875,13 +871,6 @@ export default function GadgetEditor() {
     setWorkspaceView({ mode: 'activity' })
   }, [workspaceView])
 
-  const openAgentDefinition = useCallback(() => {
-    setWorkspaceTransitionEnabled(true)
-    setActivityClosing(false)
-    activityReturnViewRef.current = null
-    setWorkspaceView({ mode: 'agent' })
-  }, [])
-
   const closeWorkspacePane = useCallback(() => {
     if (workspaceView?.mode !== 'activity') {
       setWorkspaceVisibility('closed')
@@ -889,7 +878,7 @@ export default function GadgetEditor() {
     }
     setWorkspaceTransitionEnabled(true)
     const returnView = activityReturnViewRef.current
-    const returnShowsPane = returnView?.mode === 'app' || returnView?.mode === 'agent'
+    const returnShowsPane = returnView?.mode === 'app'
       || (returnView === null && hasAnyApps && !simpleMode)
     setActivityClosing(!returnShowsPane)
     setWorkspaceView(returnView)
@@ -1426,14 +1415,6 @@ export default function GadgetEditor() {
             onViewActivity={openActivity}
           />
 
-          <WorkshopIconButton
-            onClick={openAgentDefinition}
-            title="Agent settings"
-            aria-label="Agent settings"
-          >
-            <Robot size={16} />
-          </WorkshopIconButton>
-
           {connectionLost && (
             <span className="text-xs text-kumo-warning px-2 py-0.5 rounded-full bg-kumo-warning-tint border border-kumo-warning/20">
               Reconnecting…
@@ -1578,8 +1559,6 @@ export default function GadgetEditor() {
             <div className="flex min-w-0 flex-1 items-center overflow-hidden">
               {paneShowsActivity ? (
                 <PaneLabel icon={Pulse} title="Activity" />
-              ) : showingAgent ? (
-                <PaneLabel icon={Robot} title="Agent" />
               ) : visibleGadgets.length > 1 ? (
                 <PaneWorkpieceTabs
                   gadgets={visibleGadgets}
@@ -1596,8 +1575,7 @@ export default function GadgetEditor() {
             </div>
 
             <div className="flex flex-shrink-0 items-center gap-1.5">
-              {!showingAgent && (
-                <div className="flex items-center rounded-lg border border-kumo-line p-0.5">
+              <div className="flex items-center rounded-lg border border-kumo-line p-0.5">
                 {paneShowsActivity
                   ? ACTIVITY_TABS.map(tab => (
                     <PaneTab
@@ -1616,8 +1594,7 @@ export default function GadgetEditor() {
                       onClick={() => handleTabSelect(tab.value)}
                     />
                   ))}
-                </div>
-              )}
+              </div>
 
               {!paneShowsWorkspace && (
                 <GadgetExportMenu
@@ -1642,9 +1619,7 @@ export default function GadgetEditor() {
               )}
 
               <WorkshopIconButton
-                aria-label={paneShowsActivity
-                  ? 'Close activity'
-                  : showingAgent ? 'Close agent settings' : 'Close gadget pane'}
+                aria-label={paneShowsActivity ? 'Close activity' : 'Close gadget pane'}
                 title="Close"
                 onClick={closeWorkspacePane}
               >
@@ -1662,9 +1637,6 @@ export default function GadgetEditor() {
                 onAutoApproveChange={() => setAutoApproveReloadTrigger(t => t + 1)}
                 autoApproveReloadTrigger={autoApproveReloadTrigger}
               />
-            )}
-            {showingAgent && (
-              <AgentDefinitionEditor overseer={overseer.stub} />
             )}
             <div className={paneShowsWorkspace ? 'hidden' : 'contents'}>
             <div

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { Dialog, useKumoToastManager } from '@cloudflare/kumo'
+import { Dialog } from '@cloudflare/kumo'
 import { ArrowsClockwise, Check, Copy, ImageSquare, Pencil, Plus, Trash, Warning, X } from '@phosphor-icons/react'
 import { RpcStub } from 'capnweb'
 import { BlueprintGadgetSummary, GadgetClient, GadgetMetadata, Overseer, BlueprintBindingAnnotation, BlueprintScreenshotUpload } from '@gadgets/workshop-shared/api'
@@ -10,6 +10,7 @@ import {
   BlueprintBindingCard,
   loadBindingCardData,
 } from './components/BlueprintBindingCard'
+import { useToasts } from './useToasts'
 
 const BLUEPRINT_SCREENSHOT_WIDTH = 1280
 const BLUEPRINT_SCREENSHOT_HEIGHT = 720
@@ -71,7 +72,7 @@ type Props = {
 }
 
 export default function BlueprintModal({ open, onClose, overseer, gadget, metadata }: Props) {
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
 
   const [blueprints, setBlueprints] = useState<BlueprintGadgetSummary[]>([])
   const [loading, setLoading] = useState(false)

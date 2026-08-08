@@ -1,6 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import {
   MagnifyingGlass,
   ArrowsClockwise,
@@ -24,6 +23,7 @@ import {
 import { ConnectedAccountsSubscriber, GatekeeperVendorInfo } from '@gadgets/workshop-shared/api'
 import { useDocumentTitle } from '../useDocumentTitle'
 import { useSiteName } from '../ServerConfigContext'
+import { useToasts } from '../useToasts'
 
 export const Route = createFileRoute('/gatekeepers')({
   component: ConnectorsPage,
@@ -445,7 +445,7 @@ function ConnectorsPage() {
   const siteName = useSiteName()
 
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
 
   const [search, setSearch] = useState('')
   const [view, setView] = useState<'grid' | 'list'>(() => {

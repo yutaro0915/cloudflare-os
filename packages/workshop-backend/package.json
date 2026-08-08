@@ -28,6 +28,7 @@
     "capnweb-validate": "0.2.1",
     "diff": "^8.0.4",
     "jose": "^6.2.5",
+    "yaml": "^2.9.0",
     "yjs": "^13.6.31"
   },
   "devDependencies": {

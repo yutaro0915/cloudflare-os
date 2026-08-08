@@ -16,7 +16,6 @@ import {
   Star,
 } from '@phosphor-icons/react'
 import { openCommandPalette } from './commandPaletteBus'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import type { RpcStub } from 'capnweb'
 import {
   GadgetMetadataWithTimestamps,
@@ -27,6 +26,7 @@ import { useAuthenticatedApi } from '../../AuthContext'
 import ShareModal from '../../ShareModal'
 import DeleteConfirmationDialog from '../DeleteConfirmationDialog'
 import SidebarGadgetRow from './SidebarGadgetRow'
+import { useToasts } from '../../useToasts'
 
 // Cap on items shown in the Recent list before the user clicks through to /workspaces.
 const RECENT_INITIAL_LIMIT = 6
@@ -67,7 +67,7 @@ function useWorkspacesContext(): WorkspacesContextValue {
 // ─────────────────────────────────────────────────────────────────────────────
 export function SidebarWorkspacesProvider({ children }: { children: ReactNode }) {
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
 
   const [gadgets, setGadgets] = useState<GadgetMetadataWithTimestamps[]>([])
   const [gadgetsLoading, setGadgetsLoading] = useState(true)
