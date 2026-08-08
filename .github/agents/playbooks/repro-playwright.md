@@ -18,5 +18,5 @@ evidence for human reviewers.
 ## Evidence in the PR
 
 - State "repro script fails before / passes after" with the script path.
-- Screenshots: commit under the `pr-assets` branch (never into develop) and link with
+- Screenshots: commit under the `pr-assets` branch (never into main) and link with
   raw URLs; traces/videos go to Actions artifacts.

@@ -1,10 +1,10 @@
 name: merge-train
 
-# Serialized merge into develop (docs/self-improvement-loop-plan.md, Phase 2).
+# Serialized merge into main (docs/self-improvement-loop-plan.md, Phase 2).
 # GitHub's native merge queue is unavailable on personal repos, so this workflow is the
 # train: `concurrency` makes it a mutex, and each run processes exactly ONE queued PR
 # (oldest `automerge` label first):
-#   merge latest develop into the PR head (locally, no push) -> run the full CI suite
+#   merge latest main into the PR head (locally, no push) -> run the full CI suite
 #   on that merge result -> merge the PR only if GREEN -> re-dispatch itself if more
 #   PRs are queued.
 # CI runs *inside* this workflow because merges done with GITHUB_TOKEN do not trigger
@@ -36,13 +36,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: develop
+          ref: main
           fetch-depth: 0
 
       - name: Pick oldest queued PR
         id: pick
         run: |
-          PR=$(gh pr list --base develop --label automerge --state open \
+          PR=$(gh pr list --base main --label automerge --state open \
             --json number,createdAt --jq 'sort_by(.createdAt) | .[0].number // empty')
           if [ -z "$PR" ]; then
             echo "Queue is empty."
@@ -70,7 +70,7 @@ jobs:
             echo "blocked=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Merge latest develop into PR head (local)
+      - name: Merge latest main into PR head (local)
         if: steps.pick.outputs.pr != '' && steps.guard.outputs.blocked == 'false'
         id: sync
         run: |
@@ -79,7 +79,7 @@ jobs:
           git config user.email "merge-train@users.noreply.github.com"
           git fetch origin "$HEAD"
           git checkout -B train-candidate "origin/$HEAD"
-          if git merge --no-edit origin/develop; then
+          if git merge --no-edit origin/main; then
             echo "conflict=false" >> "$GITHUB_OUTPUT"
           else
             echo "conflict=true" >> "$GITHUB_OUTPUT"
@@ -95,10 +95,10 @@ jobs:
           gh pr edit "$PR" --remove-label automerge --add-label needs-rebase
           if [ "$ATTEMPTS" -ge 2 ]; then
             gh pr edit "$PR" --add-label needs-human
-            gh pr comment "$PR" --body "merge-train: conflict with develop persists after $ATTEMPTS resolution attempts. Labeling \`needs-human\`; the train will not retry."
+            gh pr comment "$PR" --body "merge-train: conflict with main persists after $ATTEMPTS resolution attempts. Labeling \`needs-human\`; the train will not retry."
           else
             # shellcheck disable=SC2016  # literal backticks in markdown, not expansion
-            printf '<!-- merge-train-rebase -->\nmerge-train: this branch conflicts with the latest develop.\n\n@claude Please merge origin/develop into this PR branch and resolve the conflicts. Follow .github/agents/HARNESS.md. Preserve the intent of both sides; if the two changes are semantically incompatible, do not guess - comment what you found instead. When done, state clearly that the branch is ready so a human or the fixer can re-add the `automerge` label.\n' | gh pr comment "$PR" --body-file -
+            printf '<!-- merge-train-rebase -->\nmerge-train: this branch conflicts with the latest main.\n\n@claude Please merge origin/main into this PR branch and resolve the conflicts. Follow .github/agents/HARNESS.md. Preserve the intent of both sides; if the two changes are semantically incompatible, do not guess - comment what you found instead. When done, state clearly that the branch is ready so a human or the fixer can re-add the `automerge` label.\n' | gh pr comment "$PR" --body-file -
           fi
 
       - uses: pnpm/action-setup@v4
@@ -127,14 +127,14 @@ jobs:
         run: |
           PR=${{ steps.pick.outputs.pr }}
           gh pr edit "$PR" --remove-label automerge --add-label needs-human
-          gh pr comment "$PR" --body "merge-train: CI failed on the merge of this branch with the latest develop (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Removed \`automerge\`, labeled \`needs-human\`. The branch may be fine in isolation — the failure is against current develop."
+          gh pr comment "$PR" --body "merge-train: CI failed on the merge of this branch with the latest main (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Removed \`automerge\`, labeled \`needs-human\`. The branch may be fine in isolation — the failure is against current main."
 
       - name: Merge PR
         if: steps.checks.outcome == 'success'
         run: |
           PR=${{ steps.pick.outputs.pr }}
           gh pr merge "$PR" --merge
-          gh pr comment "$PR" --body "merge-train: CI GREEN against latest develop — merged. (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          gh pr comment "$PR" --body "merge-train: CI GREEN against latest main — merged. (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
 
       # Merges made with GITHUB_TOKEN don't fire push-triggered workflows, so the train
       # notifies the starter repo explicitly. Requires REPO_SYNC_TOKEN (fine-grained PAT,
@@ -148,7 +148,7 @@ jobs:
             echo "REPO_SYNC_TOKEN not set; skipping starter dispatch (bump manually)."
             exit 0
           fi
-          SHA=$(gh api "repos/$REPO/branches/develop" --jq .commit.sha)
+          SHA=$(gh api "repos/$REPO/branches/main" --jq .commit.sha)
           GH_TOKEN="$SYNC_TOKEN" gh api repos/yutaro0915/cloudflare-os-starter/dispatches \
             -f event_type=submodule-bump -f "client_payload[sha]=$SHA"
 
@@ -157,8 +157,8 @@ jobs:
       - name: Re-dispatch if queue non-empty
         if: always() && steps.pick.outputs.pr != ''
         run: |
-          REMAIN=$(gh pr list --base develop --label automerge --state open --json number --jq length)
+          REMAIN=$(gh pr list --base main --label automerge --state open --json number --jq length)
           if [ "$REMAIN" -gt 0 ]; then
             echo "$REMAIN PR(s) still queued; re-dispatching."
-            gh workflow run merge-train.yml --ref develop
+            gh workflow run merge-train.yml --ref main
           fi

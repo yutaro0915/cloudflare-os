@@ -1,14 +1,17 @@
 # Contributing to Cloudflare OS
 
-This repo follows a develop-only PR flow so humans and agents work the same way.
+This repo is trunk-based so humans and agents work the same way.
 
 ## Branch flow
 
-- All PRs target `develop` (the default branch). Do not open PRs against `main`.
-- `develop` -> PR -> human merge is the only road into `main`. PRs into `main` are
-  rejected unless they come from `develop` (required check `pr-from-develop`).
-- `main` is release-only: no direct pushes, merges into it are performed by a human,
-  and production deploys require a manual approval in the starter repo.
+- `main` is the only long-lived branch. All work happens on short-lived
+  `feature/*` (or `agent-fix/*`) branches that PR into `main`.
+- No direct pushes to `main`: everything goes through a PR with CI green.
+  PRs labeled `automerge` are merged serially by the merge train
+  (`merge-train.yml`), which re-verifies CI against the latest `main`.
+- Production release is gated separately in the starter repo: a human merges
+  the gitlink-bump PR there, and the deploy waits for a manual Environment
+  approval. Merging here does NOT deploy anything by itself.
 
 ## CI
 
@@ -26,4 +29,3 @@ We are not seeking outside contribution beyond the above. We accept small,
 trivially-verified PRs that fix a problem; please avoid low-value PRs (e.g. typo
 fixes) or PRs larger than a dozen or so lines.
 
-<!-- merge-train smoke test 2026-08-08 -->

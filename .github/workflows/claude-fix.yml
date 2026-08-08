@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: develop
+          ref: main
           fetch-depth: 1
 
       # CI-only skills: local clones never get these auto-loaded (.claude/ is gitignored;
@@ -35,7 +35,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           branch_prefix: agent-fix/
-          base_branch: develop
+          base_branch: main
           prompt: |
             Fix GitHub issue #${{ github.event.issue.number }} in this repository.
 
@@ -46,11 +46,11 @@ jobs:
             1. Read the issue with `gh issue view ${{ github.event.issue.number }}`.
             2. Implement the fix per the rubric, verify per
                .github/agents/playbooks/verify-before-pr.md.
-            3. Open a PR into develop with
-               `gh pr create --base develop --label automerge`, body starting
+            3. Open a PR into main with
+               `gh pr create --base main --label automerge`, body starting
                with "Closes #${{ github.event.issue.number }}" and a Verification section.
                The automerge label queues the PR for the merge train (merge-train.yml),
-               which re-verifies CI against latest develop and merges serially.
+               which re-verifies CI against latest main and merges serially.
             4. Comment the PR link on the issue.
           claude_args: |
             --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash(git:*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh pr create:*),Bash(pnpm:*),Bash(node:*),Bash(npx:*)"

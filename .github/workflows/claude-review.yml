@@ -1,13 +1,13 @@
 name: claude-review
 
-# Automated first-pass review of every PR into develop (agent PRs and human PRs alike).
+# Automated first-pass review of every PR into main (agent PRs and human PRs alike).
 # Advisory only: it comments, it does not gate the merge — CI (ci.yml) is the hard gate.
 # One sticky comment per PR, updated on each push, to avoid comment floods.
 
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    branches: [develop]
+    branches: [main]
 
 permissions:
   contents: read
