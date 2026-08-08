@@ -6,7 +6,7 @@ name: claude-review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review]
+    types: [opened, synchronize, ready_for_review, reopened]
     branches: [develop]
 
 permissions:
@@ -28,6 +28,8 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Agent PRs (claude-fix) are opened by the claude bot; reviewing them is the point.
+          allowed_bots: claude
           use_sticky_comment: true
           prompt: |
             Review PR #${{ github.event.pull_request.number }} (diff via
