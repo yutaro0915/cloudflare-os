@@ -1,5 +1,6 @@
 import {
   CUSTOM_AGENT_TOOL_NAMES,
+  validateBindingName,
   type AgentDefinition,
   type SkillDefinition,
 } from "@gadgets/workshop-shared/api";
@@ -112,11 +113,11 @@ export function validateSkillDefinition(value: unknown): SkillDefinition {
 export function validateAgentDefinition(value: unknown): asserts value is AgentDefinition {
   let definition = requireObject(value, "Agent definition");
   rejectUnknownFields(definition,
-      ["version", "id", "name", "modelId", "agentsMd", "skillIds", "tools"],
+      ["version", "id", "name", "modelId", "agentsMd", "skillIds", "tools", "bindings"],
       "Agent definition");
 
-  if (definition.version !== 2) {
-    throw new TypeError("Agent definition version must be 2.");
+  if (definition.version !== 3) {
+    throw new TypeError("Agent definition version must be 3.");
   }
 
   requireNonEmptyString(definition.id, "Agent definition id");
@@ -138,6 +139,33 @@ export function validateAgentDefinition(value: unknown): asserts value is AgentD
         throw new TypeError(`Unknown agent tool "${unknown}".`);
       }
     }
+  }
+
+  if (definition.bindings !== undefined) {
+    if (!Array.isArray(definition.bindings)) {
+      throw new TypeError("Agent definition bindings must be an array.");
+    }
+    let seenNames = new Set<string>();
+    definition.bindings.forEach((binding, index) => {
+      let path = `Agent definition bindings[${index}]`;
+      let ref = requireObject(binding, path);
+      rejectUnknownFields(ref, ["name", "vendorId", "resourceUrl"], path);
+      let name = requireNonEmptyString(ref.name, `${path} name`);
+      try {
+        validateBindingName(name);
+      } catch (error) {
+        throw new TypeError(`${path} name: ${(error as Error).message}`, {cause: error});
+      }
+      if (seenNames.has(name)) {
+        throw new TypeError(`${path} name "${name}" is used by another binding.`);
+      }
+      seenNames.add(name);
+      requireNonEmptyString(ref.vendorId, `${path} vendorId`);
+      let resourceUrl = requireNonEmptyString(ref.resourceUrl, `${path} resourceUrl`);
+      if (!URL.canParse(resourceUrl)) {
+        throw new TypeError(`${path} resourceUrl must be a valid URL.`);
+      }
+    });
   }
 }
 

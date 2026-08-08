@@ -43,7 +43,7 @@ const model: UserAiModelRecord = {
 };
 
 const definition: AgentDefinition = {
-  version: 2,
+  version: 3,
   id: "reviewer",
   name: "Reviewer",
   modelId: model.profile.id,

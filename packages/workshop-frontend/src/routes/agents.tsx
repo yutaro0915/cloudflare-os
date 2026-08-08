@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Check, FileMd, Plus, Robot, Trash } from '@phosphor-icons/react'
 import {
   CUSTOM_AGENT_TOOL_NAMES,
+  type AgentBindingRef,
   type AgentDefinition,
   type AiChatAuthorInfo,
   type SkillDefinition,
@@ -25,6 +26,7 @@ type AgentDraft = {
   skillIds: string[]
   toolMode: ToolMode
   toolNames: string[]
+  bindings: AgentBindingRef[]
 }
 
 function newDraft(models: AiChatAuthorInfo[]): AgentDraft {
@@ -36,6 +38,7 @@ function newDraft(models: AiChatAuthorInfo[]): AgentDraft {
     skillIds: [],
     toolMode: 'all',
     toolNames: [],
+    bindings: [],
   }
 }
 
@@ -49,7 +52,7 @@ function draftFromDefinition(definition: AgentDefinition): AgentDraft {
     toolMode = 'disabled'
     toolNames = definition.tools.disabled
   }
-  return {...definition, toolMode, toolNames}
+  return {...definition, toolMode, toolNames, bindings: definition.bindings ?? []}
 }
 
 // Switching modes discards the selection because it means something different per mode;
@@ -64,13 +67,18 @@ function definitionFromDraft(draft: AgentDraft): AgentDefinition {
   if (draft.toolMode === 'enabled') tools = {enabled: draft.toolNames}
   if (draft.toolMode === 'disabled') tools = {disabled: draft.toolNames}
   return {
-    version: 2,
+    version: 3,
     id: draft.id,
     name: draft.name.trim(),
     modelId: draft.modelId,
     agentsMd: draft.agentsMd,
     skillIds: draft.skillIds,
     tools,
+    bindings: draft.bindings.map(binding => ({
+      name: binding.name.trim(),
+      vendorId: binding.vendorId.trim(),
+      resourceUrl: binding.resourceUrl.trim(),
+    })),
   }
 }
 
@@ -140,6 +148,11 @@ function AgentsPage() {
       toasts.add({title: 'Select at least one tool', variant: 'error'})
       return
     }
+    if (definition.bindings?.some(binding =>
+        !binding.name || !binding.vendorId || !binding.resourceUrl)) {
+      toasts.add({title: 'Fill in every binding field (or remove the row)', variant: 'error'})
+      return
+    }
     setSaving(true)
     try {
       await authenticatedApi.saveAgentDefinition(definition)
@@ -195,6 +208,28 @@ function AgentsPage() {
           ? previous.toolNames.filter(tool => tool !== name)
           : [...previous.toolNames, name],
       }
+    })
+  }
+
+  const updateBinding = (index: number, field: keyof AgentBindingRef, value: string) => {
+    setDraft(previous => previous && {
+      ...previous,
+      bindings: previous.bindings.map((binding, i) =>
+        i === index ? {...binding, [field]: value} : binding),
+    })
+  }
+
+  const addBinding = () => {
+    setDraft(previous => previous && {
+      ...previous,
+      bindings: [...previous.bindings, {name: '', vendorId: '', resourceUrl: ''}],
+    })
+  }
+
+  const removeBinding = (index: number) => {
+    setDraft(previous => previous && {
+      ...previous,
+      bindings: previous.bindings.filter((_, i) => i !== index),
     })
   }
 
@@ -407,6 +442,53 @@ function AgentsPage() {
                     })}
                   </div>
                 )}
+              </section>
+
+              <section>
+                <h2 className="text-[14px] font-semibold text-kumo-default">Resource bindings</h2>
+                <p className="mt-1 text-[12px] leading-[18px] text-kumo-subtle">
+                  Resources wired into every conversation started with this agent, under the given
+                  binding name (e.g. MEMORY → memory://bank/mascot). The vendor must be connected
+                  in Gatekeepers; unresolvable bindings are skipped.
+                </p>
+                <div className="mt-3 space-y-2">
+                  {draft.bindings.map((binding, index) => (
+                    <div key={index} className="grid gap-2 sm:grid-cols-[140px_120px_1fr_32px]">
+                      <WorkshopInput
+                        aria-label="Binding name"
+                        value={binding.name}
+                        onChange={event => updateBinding(index, 'name', event.target.value)}
+                        placeholder="MEMORY"
+                        className="font-mono"
+                      />
+                      <WorkshopInput
+                        aria-label="Vendor id"
+                        value={binding.vendorId}
+                        onChange={event => updateBinding(index, 'vendorId', event.target.value)}
+                        placeholder="memory"
+                        className="font-mono"
+                      />
+                      <WorkshopInput
+                        aria-label="Resource URL"
+                        value={binding.resourceUrl}
+                        onChange={event => updateBinding(index, 'resourceUrl', event.target.value)}
+                        placeholder="memory://bank/mascot"
+                        className="font-mono"
+                      />
+                      <button
+                        type="button"
+                        aria-label="Remove binding"
+                        onClick={() => removeBinding(index)}
+                        className="flex h-9 w-8 cursor-pointer items-center justify-center rounded-lg text-kumo-subtle hover:bg-kumo-tint"
+                      >
+                        <Trash size={14} />
+                      </button>
+                    </div>
+                  ))}
+                  <WorkshopButton onClick={addBinding}>
+                    <Plus size={13} /> Add binding
+                  </WorkshopButton>
+                </div>
               </section>
 
               <div className="sticky bottom-0 -mx-6 flex items-center justify-between gap-3 border-t border-kumo-line bg-kumo-base px-6 py-4 sm:-mx-8 sm:px-8">

@@ -9,6 +9,7 @@ const draft = {
   skillIds: [],
   toolMode: 'enabled' as const,
   toolNames: ['readFile', 'writeFile', 'webFetch'],
+  bindings: [],
 }
 
 describe('draftWithToolMode', () => {
