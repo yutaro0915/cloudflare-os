@@ -24,6 +24,9 @@ let disposedApprovalQueues = 0;
 let disposedCallbacks = 0;
 let blockPoint: BlockPoint | null = null;
 let blockedPoint: BlockPoint | null = null;
+// Stub releases are delivered asynchronously and can land after the next test's reset(), so each
+// target records the generation it was created in and only counts its own.
+let generation = 0;
 
 async function pauseIfBlocked(point: BlockPoint): Promise<void> {
   if (blockPoint !== point) return;
@@ -34,6 +37,8 @@ async function pauseIfBlocked(point: BlockPoint): Promise<void> {
 }
 
 class TestApprovalQueue extends RpcTarget {
+  readonly #generation = generation;
+
   async authorizeObservation(): Promise<void> {
     events.push("authorize");
     await pauseIfBlocked("authorization");
@@ -41,11 +46,13 @@ class TestApprovalQueue extends RpcTarget {
   }
 
   [Symbol.dispose](): void {
-    disposedApprovalQueues++;
+    if (this.#generation === generation) disposedApprovalQueues++;
   }
 }
 
 class TestCallback extends RpcTarget {
+  readonly #generation = generation;
+
   async onSchedule(firing: { runId: string; scheduleId: string }): Promise<void> {
     events.push(`callback:${firing.runId}`);
     callbackScheduleIds.push(firing.scheduleId);
@@ -61,7 +68,7 @@ class TestCallback extends RpcTarget {
   }
 
   [Symbol.dispose](): void {
-    disposedCallbacks++;
+    if (this.#generation === generation) disposedCallbacks++;
   }
 }
 
@@ -104,6 +111,7 @@ export class TestHooks extends WorkerEntrypoint {
 
   reset(): void {
     this.release();
+    generation++;
     mode = "success";
     events = [];
     callbackScheduleIds = [];

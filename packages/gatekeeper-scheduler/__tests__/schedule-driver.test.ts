@@ -323,7 +323,7 @@ describe("ScheduleDriver", () => {
         disposedApprovalQueues: 2,
         disposedCallbacks: 2,
       });
-    }, { timeout: 5_000 });
+    }, { timeout: 2_000 });
 
     await driver.disable("workspace-a", "schedule-a");
     const keys = await runInDurableObject(driver, (_instance, state) =>
@@ -331,6 +331,30 @@ describe("ScheduleDriver", () => {
     );
     expect(keys).toEqual(["metadata"]);
     expect(await driver.getSchedule("workspace-a", "schedule-a")).toBeUndefined();
+  });
+
+  it("does not count stub releases that arrive after the test hooks are reset", async () => {
+    // Releases travel a different connection than the test's own RPCs, so one can land after the
+    // next test's reset(). Counting it there would make an exact disposal assertion unreachable.
+    const stale = await testEnv.TEST_HOOKS.startHook();
+    await testEnv.TEST_HOOKS.reset();
+    stale.callback[Symbol.dispose]();
+    stale.approvalQueue[Symbol.dispose]();
+
+    const fresh = await testEnv.TEST_HOOKS.startHook();
+    fresh.callback[Symbol.dispose]();
+    fresh.approvalQueue[Symbol.dispose]();
+
+    await vi.waitFor(async () => {
+      expect(await testEnv.TEST_HOOKS.read()).toMatchObject({
+        disposedApprovalQueues: 1,
+        disposedCallbacks: 1,
+      });
+    }, { timeout: 2_000 });
+    expect(await testEnv.TEST_HOOKS.read()).toMatchObject({
+      disposedApprovalQueues: 1,
+      disposedCallbacks: 1,
+    });
   });
 
   it("versions persisted rows and returns a cloned public weekly cadence", async () => {
@@ -545,7 +569,7 @@ describe("ScheduleDriver", () => {
         disposedApprovalQueues: 2,
         disposedCallbacks: 2,
       });
-    }, { timeout: 5_000 });
+    }, { timeout: 2_000 });
     expect(reportIssue).not.toHaveBeenCalled();
   });
 
