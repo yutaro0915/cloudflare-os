@@ -1,0 +1,109 @@
+name: preview-env
+
+# One ephemeral fleet per feature PR (norms: .github/agents/rubrics/flow.md).
+# Checks out the starter (the single home of deployment config), points its submodule
+# at the PR head, substitutes __PR__ in deployment.preview.jsonc, and deploys a
+# suffix-named copy of every worker. The sticky comment on the PR carries the URL.
+# Teardown lives in preview-teardown.yml (PR close + daily orphan sweep).
+#
+# Required repo secrets (skips with a notice if absent): CLOUDFLARE_API_TOKEN,
+# CLOUDFLARE_ACCOUNT_ID. Optional: CF_AI_GATEWAY_API_TOKEN.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: preview-pr-${{ github.event.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    if: '!github.event.pull_request.draft'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PR: ${{ github.event.number }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check secrets
+        id: gate
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not set; preview deploy skipped."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v6
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          repository: yutaro0915/cloudflare-os-starter
+          ref: main
+          path: starter
+
+      - uses: actions/checkout@v6
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: starter/cloudflare-os
+
+      - uses: pnpm/action-setup@v4
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v6
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          node-version: 24
+
+      - name: Generate per-PR config
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: starter
+        run: sed "s/__PR__/$PR/g" deployment.preview.jsonc > deployment.pr.jsonc
+
+      - name: Install dependencies
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: starter
+        run: |
+          pnpm install
+          pnpm --dir cloudflare-os install
+
+      # New workers refuse to deploy without their required secrets, so they are supplied
+      # at deploy time via DEPLOYMENT_SECRETS_FILE (deploy.mjs passes --secrets-file).
+      - name: Deploy preview fleet
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: starter
+        env:
+          CF_AI_GATEWAY_API_TOKEN: ${{ secrets.CF_AI_GATEWAY_API_TOKEN }}
+        run: |
+          (umask 177; printf 'CF_AI_GATEWAY_API_TOKEN=%s\n' "$CF_AI_GATEWAY_API_TOKEN" > /tmp/preview-secrets.env)
+          DEPLOYMENT_CONFIG=deployment.pr.jsonc DEPLOYMENT_SECRETS_FILE=/tmp/preview-secrets.env pnpm deploy
+          rm -f /tmp/preview-secrets.env
+
+      - name: Comment preview URL (sticky)
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          SUBDOMAIN=$(curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" \
+            | jq -r .result.subdomain)
+          URL="https://cloudflare-os-workshop-pr-$PR.$SUBDOMAIN.workers.dev"
+          MARKER="<!-- preview-env -->"
+          BODY=$(printf '%s\nPreview fleet for this PR: %s\n(sha %s — redeployed on every push; torn down on close. Sign up a throwaway account to verify.)' \
+            "$MARKER" "$URL" "${{ github.event.pull_request.head.sha }}")
+          EXISTING=$(gh pr view "$PR" -R "$GITHUB_REPOSITORY" --json comments \
+            --jq '[.comments[] | select(.body | contains("<!-- preview-env -->"))][0].url' || true)
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            COMMENT_ID=${EXISTING##*-}
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID" -f body="$BODY" >/dev/null
+          else
+            gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body "$BODY"
+          fi
