@@ -63,12 +63,8 @@ jobs:
             --jq '.files[].path | select(test("^\\.github/workflows/|^\\.github/agents/|wrangler.*\\.jsonc?$|^deployment"))' || true)
           if [ -n "$BLOCKED" ]; then
             gh pr edit "$PR" --remove-label automerge --add-label needs-human
-            gh pr comment "$PR" --body "merge-train: this PR touches protected paths (workflows / agent harness / deploy config), which the train never auto-merges. Removed \`automerge\`; a human must review and merge.
-
-Protected files:
-\`\`\`
-$BLOCKED
-\`\`\`"
+            # shellcheck disable=SC2016  # literal backticks in markdown, not expansion
+            printf 'merge-train: this PR touches protected paths (workflows / agent harness / deploy config), which the train never auto-merges. Removed `automerge`; a human must review and merge.\n\nProtected files:\n```\n%s\n```\n' "$BLOCKED" | gh pr comment "$PR" --body-file -
             echo "blocked=true" >> "$GITHUB_OUTPUT"
           else
             echo "blocked=false" >> "$GITHUB_OUTPUT"
@@ -78,7 +74,6 @@ $BLOCKED
         if: steps.pick.outputs.pr != '' && steps.guard.outputs.blocked == 'false'
         id: sync
         run: |
-          PR=${{ steps.pick.outputs.pr }}
           HEAD="${{ steps.pick.outputs.head }}"
           git config user.name "merge-train[bot]"
           git config user.email "merge-train@users.noreply.github.com"
@@ -102,10 +97,8 @@ $BLOCKED
             gh pr edit "$PR" --add-label needs-human
             gh pr comment "$PR" --body "merge-train: conflict with develop persists after $ATTEMPTS resolution attempts. Labeling \`needs-human\`; the train will not retry."
           else
-            gh pr comment "$PR" --body "<!-- merge-train-rebase -->
-merge-train: this branch conflicts with the latest develop.
-
-@claude Please merge origin/develop into this PR branch and resolve the conflicts. Follow .github/agents/HARNESS.md. Preserve the intent of both sides; if the two changes are semantically incompatible, do not guess — comment what you found instead. When done, re-add the \`automerge\` label by commenting that it is ready (a human or the fixer will re-label)."
+            # shellcheck disable=SC2016  # literal backticks in markdown, not expansion
+            printf '<!-- merge-train-rebase -->\nmerge-train: this branch conflicts with the latest develop.\n\n@claude Please merge origin/develop into this PR branch and resolve the conflicts. Follow .github/agents/HARNESS.md. Preserve the intent of both sides; if the two changes are semantically incompatible, do not guess - comment what you found instead. When done, state clearly that the branch is ready so a human or the fixer can re-add the `automerge` label.\n' | gh pr comment "$PR" --body-file -
           fi
 
       - uses: pnpm/action-setup@v4
