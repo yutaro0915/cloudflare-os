@@ -27,7 +27,7 @@ function nextSkillName(skills: SkillDefinition[]): string {
   return `new-skill-${index}`
 }
 
-function SkillsPage() {
+export function SkillsPage() {
   useDocumentTitle('Skills')
   const { authenticatedApi } = useAuthenticatedApi()
   const toasts = useToasts()
@@ -35,6 +35,10 @@ function SkillsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [markdown, setMarkdown] = useState('')
   const [metadata, setMetadata] = useState<SkillMetadata | null>(null)
+  // Whether the edit pane is open. Tracked separately from `markdown` and `selectedId`:
+  // an empty document is a legitimate editing state (clear, then rewrite), and an
+  // unsaved new skill has no id yet.
+  const [editing, setEditing] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -60,6 +64,7 @@ function SkillsPage() {
     setSelectedId(skill.id)
     setMarkdown(skill.markdown)
     setMetadata({name: skill.name, description: skill.description})
+    setEditing(true)
   }
 
   const createSkill = () => {
@@ -67,6 +72,7 @@ function SkillsPage() {
     setSelectedId(null)
     setMarkdown(newSkillMarkdown(name))
     setMetadata({name, description: 'Describe what this skill does and when to use it.'})
+    setEditing(true)
   }
 
   const validateSkill = async () => {
@@ -110,6 +116,7 @@ function SkillsPage() {
       setSelectedId(null)
       setMarkdown('')
       setMetadata(null)
+      setEditing(false)
       toasts.add({title: 'Skill deleted'})
     } catch (error) {
       console.error('Failed to delete skill:', error)
@@ -159,7 +166,7 @@ function SkillsPage() {
         </aside>
 
         <main className="min-h-0 overflow-y-auto rounded-xl border border-kumo-line bg-kumo-base">
-          {!markdown ? (
+          {!editing ? (
             <div className="flex h-full min-h-[440px] items-center justify-center px-8 text-center">
               <p className="text-[14px] font-medium text-kumo-default">Select a skill or create a new one</p>
             </div>
