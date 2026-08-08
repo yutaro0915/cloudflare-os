@@ -36,11 +36,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      # Build first: workspace packages (e.g. @gadgets/typed-storage) must have their dist
+      # entries before dependents' tests can import them on a fresh checkout.
+      - name: Build
+        run: pnpm run build
+
       - name: Lint + type check
         run: pnpm run lint
 
       - name: Tests
         run: pnpm test
-
-      - name: Build
-        run: pnpm run build
