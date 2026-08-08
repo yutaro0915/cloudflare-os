@@ -40,7 +40,7 @@ jobs:
 
           delete_fleet() {
             n="$1"
-            for w in workshop context custom error-reporter; do
+            for w in workshop context custom memory error-reporter; do
               name="cloudflare-os-$w-pr-$n"
               code=$(curl -s -o /tmp/del.json -w '%{http_code}' -X DELETE \
                 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
