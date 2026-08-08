@@ -1,4 +1,3 @@
-import { useKumoToastManager } from '@cloudflare/kumo'
 import { useAuthenticatedApi } from './AuthContext'
 import { useState, useEffect, useRef } from 'react'
 import { AiChatAuthorInfo } from '@gadgets/workshop-shared/api'
@@ -9,6 +8,7 @@ import { useAvatar, invalidateAvatarCache } from './useAvatar'
 import { compressAvatar, avatarBlobUrl } from './avatarUtils'
 import UsageSettings from './components/billing/UsageSettings'
 import { useDocumentTitle } from './useDocumentTitle'
+import { useToasts } from './useToasts'
 
 // Shared, on-language control classes (match the rest of the app: Workspaces/Blueprints headers,
 // the gatekeepers toolbar, the command palette). Kept here so the profile page reads as part of the
@@ -88,7 +88,7 @@ export default function SettingsPage() {
   useDocumentTitle('Profile')
 
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
   const [userInfo, setUserInfo] = useState<AiChatAuthorInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [isEditingName, setIsEditingName] = useState(false)

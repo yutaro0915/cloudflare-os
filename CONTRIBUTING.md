@@ -1,11 +1,31 @@
 # Contributing to Cloudflare OS
 
-At this time, we are not seeking outside contribution.
+This repo is trunk-based so humans and agents work the same way.
 
-AI has made writing code easy. The hard part, today, is not writing the code, but reviewing it, making sure quality stays high, and keeping the product coherent. In that light, unfortunately, external code contributions are "donating" the easy part of the job, while creating more of the hard work.
+## Branch flow
 
-With that said, we are happy to accept small, trivially-verified PRs that fix a problem. However, we ask that you refrain from submitting low-value PRs (e.g. typo fixes) or PRs that are more than a dozen or so lines. Such PRs will be closed with a reference to this guideline.
+- `main` is the only long-lived branch. All work happens on short-lived
+  `feature/*` (or `agent-fix/*`) branches that PR into `main`.
+- No direct pushes to `main`: everything goes through a PR with CI green.
+  PRs labeled `automerge` are merged serially by the merge train
+  (`merge-train.yml`), which re-verifies CI against the latest `main`.
+- Production release is gated separately in the starter repo: a human merges
+  the gitlink-bump PR there, and the deploy waits for a manual Environment
+  approval. Merging here does NOT deploy anything by itself.
 
-If you have a big idea you'd like us to consider, feel free to [open a discussion](https://github.com/cloudflare/cloudflare-os/discussions) about it.
+## CI
 
-This policy may change in the future as the project matures. Until then, thank you for your understanding.
+- `ci.yml` (build -> lint -> test) must be green before a PR can merge.
+- Run `pnpm run build`, `pnpm run lint`, and `pnpm test` locally before opening a PR.
+
+## Bug reports and agent fixes
+
+- File bugs using the structured issue template ("Bug report").
+- Adding the `agent-fix` label to an issue queues it for automated fixing.
+
+## Scope
+
+We are not seeking outside contribution beyond the above. We accept small,
+trivially-verified PRs that fix a problem; please avoid low-value PRs (e.g. typo
+fixes) or PRs larger than a dozen or so lines.
+

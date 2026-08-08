@@ -3,14 +3,14 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import type { RpcStub } from 'capnweb'
 import type { Overseer, OutputFormatOffer } from '@gadgets/workshop-shared/api'
 import { useAuthenticatedApi } from '../../AuthContext'
+import { useToasts } from '../../useToasts'
 
 type AuthenticatedApiStub = ReturnType<typeof useAuthenticatedApi>['authenticatedApi']
 type Navigate = ReturnType<typeof useNavigate>
-type Toasts = ReturnType<typeof useKumoToastManager>
+type Toasts = ReturnType<typeof useToasts>
 
 export type OutputFormats = {
   // Empty until loaded, and on failure; callers render nothing rather than a spinner.
@@ -78,7 +78,7 @@ export async function createFromFormat(
 export function useOutputFormats(): OutputFormats {
   const { authenticatedApi } = useAuthenticatedApi()
   const navigate = useNavigate()
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
   const [formats, setFormats] = useState<OutputFormatOffer[]>([])
   const [creating, setCreating] = useState<string | null>(null)
 

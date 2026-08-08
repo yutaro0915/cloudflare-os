@@ -1,5 +1,4 @@
 import { Link } from "@tanstack/react-router";
-import { useKumoToastManager } from "@cloudflare/kumo";
 import {
   Blueprint as BlueprintIcon,
   BookOpen,
@@ -12,12 +11,13 @@ import { useAuthenticatedApi } from "./AuthContext";
 import { BindingBadge, uniqueBindingBadges } from "./components/BlueprintCard";
 import { BlueprintPreviewPlaceholder } from "./components/BlueprintPreviewImage";
 import ViewToggle from "./components/ViewToggle";
+import { useToasts } from './useToasts'
 
 type VendorMap = Map<string, VendorDescription>;
 
 export default function BlueprintsPage() {
   const { authenticatedApi } = useAuthenticatedApi();
-  const toasts = useKumoToastManager();
+  const toasts = useToasts();
   const toastsRef = useRef(toasts);
   toastsRef.current = toasts;
 

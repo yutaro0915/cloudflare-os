@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback, type MutableRefObject } from 'react'
-import { Tooltip, useKumoToastManager } from '@cloudflare/kumo'
+import { Tooltip } from '@cloudflare/kumo'
 import { Plus, CaretRight, Warning } from '@phosphor-icons/react'
 import { RpcStub, RpcTarget } from 'capnweb'
 import { AuthenticatedApi, ConnectedAccountsSubscriber } from '@gadgets/workshop-shared/api'
@@ -9,6 +9,7 @@ import { GatekeeperIcon } from './components/GatekeeperIcon'
 import {
   PICKER_CAPTION, PICKER_EMPTY, PICKER_ROW, PICKER_ROW_ACTIVE, TabHint,
 } from './components/pickerRows'
+import { useToasts } from './useToasts'
 
 export interface VendorOption {
   id: string
@@ -88,7 +89,7 @@ export default function ResourcePicker({
   authenticatedApi, searchText, onSelectAccount, onRefine, onReadyChange, compact,
   maxHeight: maxHeightOverride, style, activeIndex, onItems, activateRef,
 }: ResourcePickerProps) {
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
 
   const buildRefineUrl = useCallback((suffix: string, replaceSearch?: boolean) => {
     const newUrl = replaceSearch ? suffix : searchText.trim() + suffix

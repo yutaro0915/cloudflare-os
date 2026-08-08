@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Dialog, DropdownMenu, useKumoToastManager } from '@cloudflare/kumo'
+import { Dialog, DropdownMenu } from '@cloudflare/kumo'
 import {
   MagnifyingGlass,
   DotsThreeVertical,
@@ -27,6 +27,7 @@ import { useOutputFormats } from '../components/format/useOutputFormats'
 import NewFormatRow from '../components/format/NewFormatRow'
 import DeleteConfirmationDialog from '../components/DeleteConfirmationDialog'
 import { WorkshopButton, WorkshopIconButton } from '../components/WorkshopControls'
+import { useToasts } from '../useToasts'
 
 // The Outputs page: everything the user's workspaces have produced, in one place, so they don't
 // have to remember which workspace they made a thing in. Backed by an index in the user's own
@@ -391,7 +392,7 @@ function OutputsPage() {
   useDocumentTitle('Outputs')
   const { authenticatedApi } = useAuthenticatedApi()
   const navigate = useNavigate()
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
   const { formats } = useOutputFormats()
   // In a ref so the load effect can report a failed refresh without taking the manager as a
   // dependency, which would refetch for an unrelated reason.

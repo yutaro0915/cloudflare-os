@@ -39,3 +39,6 @@ wrangler.dev.jsonc
 .dev.vars.*
 **/.dev.vars
 **/.dev.vars.*
+
+# Local agent settings and CI-materialized skills (see .github/agents/) — never commit.
+.claude/

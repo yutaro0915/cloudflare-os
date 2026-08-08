@@ -1,19 +1,20 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CloudflareUsageInfo, CloudflareAccountOption } from '@gadgets/workshop-shared/api'
-import { Button, useKumoToastManager } from '@cloudflare/kumo'
+import { Button } from '@cloudflare/kumo'
 import { Lightning, CloudCheck, Warning } from '@phosphor-icons/react'
 import CloudflareLogo from '../auth/CloudflareLogo'
 import { useAuthenticatedApi } from '../../AuthContext'
 import { useCloudflareLimitsEnabled } from '../../ServerConfigContext'
 import { buildAddCreditsUrl } from './creditsUrl'
 import ResetCountdown from './ResetCountdown'
+import { useToasts } from '../../useToasts'
 
 // Shows the user's free-tier usage and Cloudflare connection / credit status on the profile page.
 // Renders nothing unless the Cloudflare limits flow is enabled server-side.
 export default function UsageSettings() {
   const limitsEnabled = useCloudflareLimitsEnabled()
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
   const [usage, setUsage] = useState<CloudflareUsageInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)

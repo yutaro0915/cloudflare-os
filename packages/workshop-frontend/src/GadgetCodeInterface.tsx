@@ -1,5 +1,4 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import { DownloadSimple } from '@phosphor-icons/react'
 import { Overseer, CodeSubscriber, CodeUpdate } from '@gadgets/workshop-shared/api'
 import { RpcStub, RpcTarget } from 'capnweb'
@@ -11,6 +10,7 @@ import CodeEditor from './CodeEditor'
 import CodeDiffEditor from './CodeDiffEditor'
 import type { StreamingProposedChanges } from './ChatInterface'
 import { saveTextToFile } from './fileTransfers'
+import { useToasts } from './useToasts'
 
 // RpcTarget implementation for receiving code updates from the server
 class CodeSubscriberImpl extends RpcTarget implements CodeSubscriber {
@@ -134,7 +134,7 @@ type QueuedCodeUpdate = {
 }
 
 export default function GadgetCodeInterface({ overseer, filesRoot, height = '100%', onCodeChange, selectedChatId = null, proposedChanges, draftProposedChanges, streamingProposedChanges, streamingActiveFile, isAgentActive, isVisible = true, onHasCodeChange }: GadgetCodeInterfaceProps) {
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
   const branchMode = selectedChatId !== null
 
   // Yjs document and files map - persistent across reconnections. The doc holds the whole

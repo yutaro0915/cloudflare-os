@@ -14,12 +14,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { reportIssue } from './errorReporting'
-import {
-  DropdownMenu,
-  Popover,
-  Tooltip,
-  useKumoToastManager,
-} from "@cloudflare/kumo";
+import { DropdownMenu, Popover, Tooltip } from "@cloudflare/kumo";
 
 import {
   CaretDown,
@@ -50,6 +45,7 @@ import {
   Question,
   ArrowUpRight,
   Blueprint,
+  Robot,
 } from "@phosphor-icons/react";
 import { RpcStub, RpcTarget } from "capnweb";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -81,6 +77,7 @@ import {
   BlueprintOutput,
   MessageFormatRef,
   OutputFormatOffer,
+  AgentDefinition,
 } from "@gadgets/workshop-shared/api";
 import { ActionKind, ResourceDescription } from "@gadgets/workshop-shared/gatekeeper";
 import {
@@ -121,6 +118,7 @@ import OutOfCreditsModal from "./components/billing/OutOfCreditsModal";
 import { useSlashCommandPicker } from "./components/chat/SlashCommandPicker";
 import { formatFullTimestamp } from "./utils/formatTimestamp";
 import { copyToClipboard } from "./clipboard";
+import { useToasts } from './useToasts'
 
 export interface StreamingProposedChanges {
   updates: Uint8Array[];
@@ -674,6 +672,8 @@ function getToolCallSummary(
     }
     case "giveUp":
       return { verb: "Stopped" };
+    case "readSkill":
+      return { verb: "Loaded skill", target: tc.input.id };
     case "webFetch": {
       let target = tc.input.url;
       try {
@@ -764,6 +764,8 @@ function describeToolCallCount(toolName: AiToolCall["toolName"], count: number):
       return `Observed ${pluralize(count, "change set")}`;
     case "giveUp":
       return count === 1 ? "Stopped" : `Stopped ${count} times`;
+    case "readSkill":
+      return `Loaded ${pluralize(count, "skill")}`;
     case "listBlueprints":
       return `Listed blueprints`;
     case "listConnectableResources":
@@ -784,6 +786,7 @@ function getToolIcon(
   switch (toolName) {
     case "readFile":
     case "writeFile":
+    case "readSkill":
       return FileIcon;
     case "editFile":
       return PencilSimple;
@@ -836,6 +839,8 @@ function getProvisionalToolLabel(toolName: AiToolCall["toolName"] | null | undef
       return "Observing user changes";
     case "giveUp":
       return "Stopping";
+    case "readSkill":
+      return "Loading skill";
     default:
       return "Using tool";
   }
@@ -860,6 +865,7 @@ function getProvisionalToolVerb(toolName: AiToolCall["toolName"]): string {
     case "webFetch": return "Fetching";
     case "observeUserChanges": return "Observing user changes";
     case "giveUp": return "Stopping";
+    case "readSkill": return "Loading skill";
     case "listBlueprints": return "Listing blueprints";
     case "listConnectableResources": return "Listing connectable resources";
     case "requestConnection": return "Requesting a connection";
@@ -884,6 +890,7 @@ function describeProvisionalToolCount(toolName: AiToolCall["toolName"], count: n
     case "createGadget": return `Creating ${pluralize(count, "gadget")}`;
     case "observeUserChanges": return `Observing ${pluralize(count, "change set")}`;
     case "giveUp": return "Stopping";
+    case "readSkill": return `Loading ${pluralize(count, "skill")}`;
     case "listBlueprints": return "Listing blueprints";
     case "listConnectableResources": return "Listing connectable resources";
     case "requestConnection": return `Requesting ${pluralize(count, "connection")}`;
@@ -1766,6 +1773,9 @@ export const ChatInput = ({
   models,
   selectedModel,
   onModelChange,
+  agents = [],
+  selectedAgent = null,
+  onAgentChange,
   pendingConsoleLogCount = 0,
   consoleLogPreview = "",
   consoleLogSeverity = "info",
@@ -1797,11 +1807,15 @@ export const ChatInput = ({
     capsules?: CapsuleSpecifier[],
     attachments?: ChatAttachmentHandle[],
     formats?: MessageFormatRef[],
+    agentId?: string | null,
   ) => Promise<void> | void;
   isAgentActive: boolean;
   models: AiChatAuthorInfo[];
   selectedModel: string | null;
   onModelChange: (modelId: string | null) => void;
+  agents?: AgentDefinition[];
+  selectedAgent?: string | null;
+  onAgentChange?: (agentId: string | null) => void;
   pendingConsoleLogCount?: number;
   consoleLogPreview?: string;
   consoleLogSeverity?: "error" | "warn" | "info";
@@ -1833,7 +1847,7 @@ export const ChatInput = ({
   /** Called after a gatekeeper is connected via the attach flow, so the parent can refresh the
    * pre-approval catalog and proactively offer to pre-approve its actions. */
 }) => {
-  const toasts = useKumoToastManager();
+  const toasts = useToasts();
   const [inputValue, setInputValue] = useState("");
   const [capsules, setCapsules] = useState<InputCapsule[]>([]);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
@@ -2437,7 +2451,8 @@ export const ChatInput = ({
       await onSend(message, selectedModel,
           capsuleSpecifiers?.length ? capsuleSpecifiers : undefined,
           readyAttachments.length ? readyAttachments : undefined,
-          formatRefs);
+          formatRefs,
+          newChat ? selectedAgent : null);
       for (const attachment of attachmentsSnapshot) {
         if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
       }
@@ -2956,9 +2971,12 @@ export const ChatInput = ({
     : consoleLogSeverity === "warn"
       ? "warning"
       : "log";
-  const selectedModelLabel = selectedModel == null
+  const selectedAgentDefinition = newChat
+    ? agents.find(agent => agent.id === selectedAgent)
+    : undefined;
+  const selectedModelLabel = selectedAgentDefinition?.name ?? (selectedModel == null
     ? "No agent"
-    : models.find((model) => model.id === selectedModel)?.name ?? selectedModel;
+    : models.find((model) => model.id === selectedModel)?.name ?? selectedModel);
 
   const hasReadyAttachment = pendingAttachments.some(
     (attachment) => attachment.uploadState === "ready" && attachment.ref,
@@ -3321,7 +3339,7 @@ export const ChatInput = ({
                     <button
                       type="button"
                       className="group inline-flex h-8 min-w-0 max-w-[180px] cursor-pointer items-center gap-1.5 rounded-lg px-2 text-[13px] leading-5 tracking-[-0.25px] text-kumo-subtle transition-[background-color,color,transform] duration-150 ease-out hover:bg-kumo-tint hover:text-kumo-default focus-visible:bg-kumo-tint focus-visible:text-kumo-default focus-visible:outline-none active:scale-[0.97] data-[popup-open]:bg-kumo-tint data-[popup-open]:text-kumo-default"
-                      aria-label="Select model"
+                      aria-label="Select model or agent"
                     >
                       <span className="min-w-0 truncate">{selectedModelLabel}</span>
                       <CaretDown
@@ -3333,12 +3351,45 @@ export const ChatInput = ({
                   }
                 />
                 <DropdownMenu.Content className="themed-floating-shadow-lg !z-[1100] !min-w-[190px] rounded-2xl border border-kumo-line/70 bg-kumo-base p-1">
+                  {newChat && agents.length > 0 && (
+                    <>
+                      <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.6px] text-kumo-inactive">
+                        Agents
+                      </div>
+                      {agents.map((agent) => {
+                        const active = selectedAgent === agent.id;
+                        return (
+                          <DropdownMenu.Item
+                            key={agent.id}
+                            onClick={() => {
+                              onModelChange(agent.modelId);
+                              onAgentChange?.(agent.id);
+                            }}
+                            className="!h-auto rounded-xl !px-2 !py-1.5 text-[12px] leading-4 font-normal tracking-[-0.15px] text-kumo-subtle transition-colors data-highlighted:bg-kumo-tint/70 data-highlighted:text-kumo-default"
+                          >
+                            <Robot size={13} className="mr-2 flex-shrink-0 text-kumo-inactive" />
+                            <span className="min-w-0 flex-1 truncate">{agent.name}</span>
+                            {active && (
+                              <Check size={12} weight="bold" className="ml-3 flex-shrink-0 text-kumo-inactive" />
+                            )}
+                          </DropdownMenu.Item>
+                        );
+                      })}
+                      <div className="my-1 border-t border-kumo-line/70" />
+                    </>
+                  )}
+                  <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.6px] text-kumo-inactive">
+                    Models
+                  </div>
                   {models.map((model) => {
-                    const active = selectedModel === model.id;
+                    const active = selectedAgent == null && selectedModel === model.id;
                     return (
                       <DropdownMenu.Item
                         key={model.id}
-                        onClick={() => onModelChange(model.id)}
+                        onClick={() => {
+                          onAgentChange?.(null);
+                          onModelChange(model.id);
+                        }}
                         className="!h-auto rounded-xl !px-2 !py-1.5 text-[12px] leading-4 font-normal tracking-[-0.15px] text-kumo-subtle transition-colors data-highlighted:bg-kumo-tint/70 data-highlighted:text-kumo-default"
                       >
                         <span className="min-w-0 flex-1 truncate">{model.name}</span>
@@ -3350,11 +3401,14 @@ export const ChatInput = ({
                   })}
                   <div className="my-1 border-t border-kumo-line/70" />
                   <DropdownMenu.Item
-                    onClick={() => onModelChange(null)}
+                    onClick={() => {
+                      onAgentChange?.(null);
+                      onModelChange(null);
+                    }}
                     className="!h-auto rounded-xl !px-2 !py-1.5 text-[12px] leading-4 font-normal tracking-[-0.15px] text-kumo-subtle transition-colors data-highlighted:bg-kumo-tint/70 data-highlighted:text-kumo-default"
                   >
                     <span className="min-w-0 flex-1 truncate">No agent</span>
-                    {selectedModel == null && (
+                    {selectedAgent == null && selectedModel == null && (
                       <Check size={12} weight="bold" className="ml-3 flex-shrink-0 text-kumo-inactive" />
                     )}
                   </DropdownMenu.Item>
@@ -4239,8 +4293,8 @@ function ChatInterface({
   outputOfWorkpiece,
 }: ChatInterfaceProps) {
   // Persistent cache that survives reconnects
-  const toasts = useKumoToastManager();
-  const { currentUser } = useAuthenticatedApi();
+  const toasts = useToasts();
+  const { authenticatedApi, currentUser } = useAuthenticatedApi();
   const getOverseer = useCallback(() => overseer, [overseer]);
   const cacheRef = useRef<ChatCache>({
     chats: new Map(),
@@ -4321,7 +4375,9 @@ function ChatInterface({
   const [availableModels, setAvailableModels] = useState<AiChatAuthorInfo[]>(
     [],
   );
+  const [availableAgents, setAvailableAgents] = useState<AgentDefinition[]>([]);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [sidebarActiveTab, setSidebarActiveTab] = useState<
     "chat" | "connections"
   >("chat");
@@ -4816,6 +4872,7 @@ function ChatInterface({
     if (selectedChatId === null) {
       setSelectedModel(getStoredSelectedModel(availableModels));
     } else {
+      setSelectedAgent(null);
       // For existing threads:
       // 1. If an AI agent is currently active, use that agent's model
       if (activeAgent) {
@@ -5195,9 +5252,10 @@ function ChatInterface({
 
           // After subscribing, load the list of chats and models
           // This is safe because subscription will catch any new activity
-          const [chats, models] = await Promise.all([
+          const [chats, models, agents] = await Promise.all([
             overseer.listChats(),
             overseer.listModels(),
+            authenticatedApi.listAgentDefinitions(),
           ]);
 
           chats.forEach((chat) => {
@@ -5207,6 +5265,7 @@ function ChatInterface({
           setChatListReady(true);
 
           setAvailableModels(models);
+          setAvailableAgents(agents);
 
           setSelectedModel(getStoredSelectedModel(models));
 
@@ -5235,7 +5294,7 @@ function ChatInterface({
       }
       // Note: subscriberRef.current stays alive for potential resubscription
     };
-  }, [overseer]);
+  }, [authenticatedApi, overseer]);
 
   // Patch cached chat messages on action upserts.
   useActionEntries(overseer, (record) => {
@@ -5341,6 +5400,7 @@ function ChatInterface({
     capsules?: CapsuleSpecifier[],
     attachments?: ChatAttachmentHandle[],
     formats?: MessageFormatRef[],
+    agentId?: string | null,
   ) => {
     const message = typeof messageText === "string" ? messageText.trim() : messageText ?? "";
     if (!message && (!attachments || attachments.length === 0)) return;
@@ -5352,7 +5412,7 @@ function ChatInterface({
       if (selectedChatId === null) {
         // Create a new chat (with optional capsules).
         const newChatId = await overseer.newChat(
-            message, model, capsules, attachments, formats);
+            message, model, capsules, attachments, formats, agentId);
         onNavigateToChatRef.current(newChatId);
       } else {
         // Send message to existing chat.
@@ -5379,13 +5439,14 @@ function ChatInterface({
     capsules?: CapsuleSpecifier[],
     attachments?: ChatAttachmentHandle[],
     formats?: MessageFormatRef[],
+    agentId?: string | null,
   ) => {
     const message = typeof messageText === "string" ? messageText.trim() : messageText ?? "";
     if (!message && (!attachments || attachments.length === 0)) return;
     const model = modelId !== undefined ? modelId : selectedModel;
     try {
       const newChatId = await overseer.newChat(
-          message, model, capsules, attachments, formats);
+          message, model, capsules, attachments, formats, agentId);
       onNavigateToChatRef.current(newChatId);
     } catch (err) {
       console.error("Failed to create new chat:", err);
@@ -5396,8 +5457,13 @@ function ChatInterface({
 
   // Handle model change
   const handleModelChange = (modelId: string | null) => {
+    setSelectedAgent(null);
     setSelectedModel(modelId);
     persistSelectedModel(modelId);
+  };
+
+  const handleAgentChange = (agentId: string | null) => {
+    setSelectedAgent(agentId);
   };
 
   // Handle stopping the agent
@@ -6629,6 +6695,9 @@ function ChatInterface({
             models={availableModels}
             selectedModel={selectedModel}
             onModelChange={handleModelChange}
+            agents={availableAgents}
+            selectedAgent={selectedAgent}
+            onAgentChange={handleAgentChange}
             showThinkingTraces={showThinkingTraces}
             onToggleThinkingTraces={toggleShowThinkingTraces}
             minRows={2}
@@ -7585,6 +7654,9 @@ function ChatInterface({
                     models={availableModels}
                     selectedModel={selectedModel}
                     onModelChange={handleModelChange}
+                    agents={selectedChatId === null ? availableAgents : undefined}
+                    selectedAgent={selectedAgent}
+                    onAgentChange={handleAgentChange}
                     pendingConsoleLogCount={pendingConsoleLogCount}
                     consoleLogPreview={consoleLogPreview}
                     consoleLogSeverity={consoleLogSeverity}
@@ -7593,6 +7665,7 @@ function ChatInterface({
                     onStop={handleStop}
                     showThinkingTraces={showThinkingTraces}
                     onToggleThinkingTraces={toggleShowThinkingTraces}
+                    newChat={selectedChatId === null}
                     blockedReason={
                       hasPendingConnectionRequest
                         ? "Set up or deny the connection request above to continue."

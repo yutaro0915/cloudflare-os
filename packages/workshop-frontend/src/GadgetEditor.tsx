@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type PointerEvent as ReactPointerEvent } from 'react'
 import { useParams, useNavigate, useSearch, Link } from '@tanstack/react-router'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import {
   ShareNetwork,
   Pencil,
@@ -55,6 +54,7 @@ import WorkspaceOpenErrorPage from './components/WorkspaceOpenErrorPage'
 import { useWorkspaceOpen } from './useWorkspaceOpen'
 import { reportIssue } from './errorReporting'
 import GadgetExportMenu from './GadgetExportMenu'
+import { useToasts } from './useToasts'
 
 const NO_GADGETS: ReadonlySet<WorkpieceId> = new Set()
 
@@ -427,7 +427,7 @@ export default function GadgetEditor() {
   const urlWorkpieceId = workpieceParam !== undefined ? workpieceParam : null
 
   // ── toasts ─────────────────────────────────────────────────────────────────────
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
 
   // ── core state ──────────────────────────────────────────────────────────────
   // The workspace's workpiece list (gadget-type workpieces only in v1), kept live via
@@ -765,10 +765,12 @@ export default function GadgetEditor() {
   const hasAnyApps = allGadgets.length > 0
   const showingActivity = workspaceView?.mode === 'activity'
   const showFullEditor = layoutModeReady && (
-    showingActivity || (hasAnyApps && (workspaceView === null ? !simpleMode : workspaceView.mode === 'app'))
+    showingActivity ||
+    (hasAnyApps && (workspaceView === null ? !simpleMode : workspaceView.mode === 'app'))
   )
   const showOutputRail = layoutModeReady && hasAnyApps && !showFullEditor
   const paneShowsActivity = showingActivity || activityClosing
+  const paneShowsWorkspace = paneShowsActivity
   useEffect(() => {
     if (!activityClosing) return
     const timeout = window.setTimeout(() => setActivityClosing(false), WORKSPACE_TRANSITION_MS)
@@ -1594,7 +1596,7 @@ export default function GadgetEditor() {
                   ))}
               </div>
 
-              {!paneShowsActivity && (
+              {!paneShowsWorkspace && (
                 <GadgetExportMenu
                   gadget={selectedGadgetStub}
                   gadgetTitle={selectedGadgetSummary?.title ?? 'Gadget'}
@@ -1603,7 +1605,7 @@ export default function GadgetEditor() {
                 />
               )}
 
-              {!paneShowsActivity && (
+              {!paneShowsWorkspace && (
                 <WorkshopIconButton
                   aria-label="Enter full screen"
                   title={activeTab === 'app' && !previewMode
@@ -1636,7 +1638,7 @@ export default function GadgetEditor() {
                 autoApproveReloadTrigger={autoApproveReloadTrigger}
               />
             )}
-            <div className={paneShowsActivity ? 'hidden' : 'contents'}>
+            <div className={paneShowsWorkspace ? 'hidden' : 'contents'}>
             <div
               ref={fullscreenOverlayRef}
               tabIndex={isGadgetFullscreen ? -1 : undefined}

@@ -1,5 +1,5 @@
 import { RpcStub } from "capnweb";
-import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, SUGGESTED_MODELS, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, BlueprintOutput, OutputSummary, WorkpieceId, ListOutputsResult } from '@gadgets/workshop-shared/api';
+import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, SUGGESTED_MODELS, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, BlueprintOutput, OutputSummary, WorkpieceId, ListOutputsResult, type AgentDefinition, type SkillDefinition } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, GatekeeperUser, GatekeeperUserVerifier, GatekeeperVendor, AccountDescription, VendorDescription, GatekeeperConnectCallback, SupportedResource, ResourceConfiguratorFrame, AppUiContext, GatekeeperUiFrame } from "@gadgets/workshop-shared/gatekeeper";
 import { shouldAutoProvisionAccount, ambientGatekeeperMode } from "./provisioning-policy.js";
 import { CloudflareGatekeeperUser } from "@gadgets/workshop-shared/cloudflare-gatekeeper";
@@ -12,6 +12,7 @@ import type { AdminSettings } from "./admin-settings.js";
 import { isReservedBlueprintKey, readBlueprintKvRecord } from "./blueprint-archive.js";
 import { filterEnabledResources, isResourceDisabled, readAdminConfig } from "./admin-config.js";
 import { buildGatekeeperVendorMap } from "./auth/auth-vendors.js";
+import { createSkillDefinition, validateAgentDefinition, validateSkillDefinition, type AgentDefinitionSnapshot } from "./agent-definition.js";
 
 const logger = createWorkshopLogger("workshop.user");
 
@@ -67,10 +68,16 @@ export type UserAiModelRecord = {
   config: AiModelConfig;
 }
 
+type LegacyAgentDefinition = Omit<AgentDefinition, "version" | "skillIds"> & {
+  version: 1;
+  skills: string[];
+};
+
 export type UserChatContext = {
   profile: AiChatAuthorInfo;
   aiModel?: UserAiModelRecord;
   quickModel?: AiModelConfig;
+  agentDefinition?: AgentDefinitionSnapshot;
 }
 
 type LoginSessionRecord = {
@@ -97,6 +104,8 @@ type LibraryBlueprintRecord = {
 type GadgetRecord = GadgetMetadata & {
   created: Date;
   lastActive?: Date;  // if missing, gadget is provisional
+  // The per-user Agent preview uses a real Overseer runtime but is not a user workspace.
+  agentPreview?: true;
   // If we're not the gadget owner (it was shared with us), `owner` is set (inherited from
   // GadgetMetadata).
 };
@@ -154,6 +163,15 @@ function makeUserStorage(storage: DurableObjectStorage) {
       aiModels: collection<UserAiModelRecord>()({
         primaryKey: record => record.profile.id,
       }),
+      agentDefinitions: collection<AgentDefinition>()({
+        primaryKey: "id",
+      }),
+      skillDefinitions: collection<SkillDefinition>()({
+        primaryKey: "id",
+        uniqueIndexes: {
+          byName: (skill: SkillDefinition) => skill.name,
+        },
+      }),
       gadgets: collection<GadgetRecord>()({
         primaryKey: "id"
       }),
@@ -198,6 +216,9 @@ function makeUserStorage(storage: DurableObjectStorage) {
       // Set once the user's pre-existing workspaces have been asked to populate the outputs index
       // (see #backfillOutputs()). Workspaces created since push on their own.
       outputsBackfilled: false,
+
+      // One-time rewrite from embedded version-1 Agent skills to independent Skill records.
+      agentDefinitionsVersion: 0,
 
       // How far that catch-up has got: the last workspace id examined. The sweep runs a page at a
       // time and resumes here on the next visit.
@@ -290,9 +311,44 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     }
 
     this.storage = makeUserStorage(ctx.storage);
+    this.#migrateAgentDefinitions();
     this.adminSettings = this.ctx.exports.AdminSettings;
 
     this.vendors = buildGatekeeperVendorMap(env);
+  }
+
+  #migrateAgentDefinitions(): void {
+    if (this.storage.agentDefinitionsVersion.get() !== 0) return;
+    this.ctx.storage.transactionSync(() => {
+      for (let stored of Array.from(this.storage.agentDefinitions.list())) {
+        let legacy = stored as unknown as LegacyAgentDefinition;
+        if (legacy.version !== 1 || !Array.isArray(legacy.skills)) continue;
+        let skillIds = legacy.skills.map((markdown, index) => {
+          let candidate = createSkillDefinition(`legacy-${legacy.id}-${index}`, markdown);
+          let existing = this.storage.skillDefinitions.byName.get(candidate.name);
+          if (existing) {
+            if (existing.markdown !== candidate.markdown) {
+              throw new Error(
+                  `Cannot migrate duplicate skill name "${candidate.name}" with different contents.`);
+            }
+            return existing.id;
+          }
+          this.storage.skillDefinitions.put(candidate);
+          return candidate.id;
+        });
+        let definition: AgentDefinition = {
+          version: 2,
+          id: legacy.id,
+          name: legacy.name,
+          modelId: legacy.modelId,
+          agentsMd: legacy.agentsMd,
+          skillIds,
+          tools: legacy.tools,
+        };
+        this.storage.agentDefinitions.put(definition);
+      }
+      this.storage.agentDefinitionsVersion.put(1);
+    });
   }
 
   async authenticate(token: string): Promise<void> {
@@ -548,6 +604,63 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     this.storage.aiModels.delete(id);
   }
 
+  async listAgentDefinitions(): Promise<AgentDefinition[]> {
+    return Array.from(this.storage.agentDefinitions.list());
+  }
+
+  async listSkillDefinitions(): Promise<SkillDefinition[]> {
+    return Array.from(this.storage.skillDefinitions.list());
+  }
+
+  async saveSkillDefinition(id: string, markdown: string): Promise<SkillDefinition> {
+    let definition = createSkillDefinition(id, markdown);
+    validateSkillDefinition(definition);
+    let existing = this.storage.skillDefinitions.byName.get(definition.name);
+    if (existing && existing.id !== definition.id) {
+      throw new Error(`A skill named "${definition.name}" already exists.`);
+    }
+    this.storage.skillDefinitions.put(definition);
+    return definition;
+  }
+
+  async deleteSkillDefinition(id: string): Promise<void> {
+    for (let agent of this.storage.agentDefinitions.list()) {
+      if (agent.skillIds.includes(id)) {
+        throw new Error(`Skill is used by agent "${agent.name}".`);
+      }
+    }
+    this.storage.skillDefinitions.delete(id);
+  }
+
+  async saveAgentDefinition(definition: AgentDefinition): Promise<void> {
+    validateAgentDefinition(definition);
+    await this.getChatContext(definition.modelId);
+    for (let skillId of definition.skillIds) {
+      if (!this.storage.skillDefinitions.get(skillId)) {
+        throw new Error(`No such skill: ${skillId}`);
+      }
+    }
+    this.storage.agentDefinitions.put(definition);
+  }
+
+  // DO NOT MAKE PUBLIC -- returns API keys. Preview definitions are validated and resolved exactly
+  // like saved definitions, but are never written to the user's Agent collection.
+  async getPreviewChatContext(definition: AgentDefinition): Promise<UserChatContext> {
+    validateAgentDefinition(definition);
+    let result = await this.getChatContext(definition.modelId);
+    let skills = definition.skillIds.map(id => {
+      let skill = this.storage.skillDefinitions.get(id);
+      if (!skill) throw new Error(`No such skill: ${id}`);
+      return skill;
+    });
+    result.agentDefinition = {...definition, skills};
+    return result;
+  }
+
+  async deleteAgentDefinition(id: string): Promise<void> {
+    this.storage.agentDefinitions.delete(id);
+  }
+
   async setQuickModel(id: string | null): Promise<void> {
     this.storage.quickModel.put(id);
   }
@@ -663,12 +776,23 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   // DO NOT MAKE PUBLIC -- returns API keys.
-  async getChatContext(modelId: string | null): Promise<UserChatContext> {
+  async getChatContext(modelId: string | null, agentId?: string | null): Promise<UserChatContext> {
     let gwConfig = getAiGatewayConfig(this.env);
 
     let result: UserChatContext = {
       profile: this.storage.profile.get()
     };
+    if (agentId) {
+      let definition = this.storage.agentDefinitions.get(agentId);
+      if (!definition) throw new Error(`No such agent: ${agentId}`);
+      let skills = definition.skillIds.map(id => {
+        let skill = this.storage.skillDefinitions.get(id);
+        if (!skill) throw new Error(`No such skill: ${id}`);
+        return skill;
+      });
+      result.agentDefinition = {...definition, skills};
+      modelId = definition.modelId;
+    }
     if (modelId) {
       // In AI Gateway mode, resolve gateway models first.
       if (gwConfig) {
@@ -709,7 +833,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   async listGadgets(): Promise<GadgetMetadataWithTimestamps[]> {
     let result: GadgetMetadataWithTimestamps[] = [];
     for (let gadget of this.storage.gadgets.list()) {
-      if (isFullyCreated(gadget)) {
+      if (!gadget.agentPreview && isFullyCreated(gadget)) {
         result.push(gadget);
       }
     }
@@ -741,6 +865,20 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   async newGadget(id: string, title: string): Promise<void> {
     let created = new Date();
     this.storage.gadgets.put({id, title, created});
+  }
+
+  async ensureAgentPreviewGadget(id: string): Promise<void> {
+    let existing = this.storage.gadgets.get(id);
+    if (existing) {
+      if (!existing.agentPreview) throw new Error("Agent preview ID collides with a workspace.");
+      return;
+    }
+    this.storage.gadgets.put({
+      id,
+      title: "Agent Preview",
+      created: new Date(),
+      agentPreview: true,
+    });
   }
 
   async ensureGadgetRegistered(id: string, title: string): Promise<void> {
@@ -799,7 +937,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       ++examined;
       cursor = gadget.id;
       // A shared workspace is mirrored on open, not swept; a half-created one has nothing yet.
-      if (!gadget.owner && isFullyCreated(gadget)) targets.push(gadget.id);
+      if (!gadget.owner && !gadget.agentPreview && isFullyCreated(gadget)) targets.push(gadget.id);
     }
     let done = examined < OUTPUTS_BACKFILL_PAGE;
 
@@ -846,7 +984,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     let result: OutputSummary[] = [];
     for (let output of this.storage.outputs.list()) {
       let workspace = this.storage.gadgets.get(output.workspaceId);
-      if (!workspace || !isFullyCreated(workspace)) continue;
+      if (!workspace || workspace.agentPreview || !isFullyCreated(workspace)) continue;
       result.push({
         workspaceId: output.workspaceId,
         workpieceId: output.workpieceId,

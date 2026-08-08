@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import type { RpcStub } from 'capnweb'
 import type { Overseer, PreApprovableAction } from '@gadgets/workshop-shared/api'
 import type { ActionKind } from '@gadgets/workshop-shared/gatekeeper'
+import { useToasts } from './useToasts'
 
 export interface AutoApprovalEntry {
   gatekeeperId: number
@@ -19,7 +19,7 @@ export function autoApprovalKey(entry: { gatekeeperId: number; actionKind: Actio
 }
 
 export function useAutoApproval(overseer: RpcStub<Overseer> | null) {
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
   const [catalog, setCatalog] = useState<PreApprovableAction[]>([])
   const [rules, setRules] = useState<Array<{ gatekeeperId: number; actionKind: ActionKind }>>([])
   const [isLoading, setIsLoading] = useState(true)

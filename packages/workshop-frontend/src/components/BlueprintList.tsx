@@ -10,9 +10,10 @@ import {
   UploadSimple,
 } from '@phosphor-icons/react'
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { DropdownMenu, useKumoToastManager } from '@cloudflare/kumo'
+import { DropdownMenu } from '@cloudflare/kumo'
 import { useAuthenticatedApi } from '../AuthContext'
 import { MENU_CONTENT, MENU_ITEM, MENU_ITEM_DANGER } from './menuStyles'
+import { useToasts } from '../useToasts'
 
 // A unified row item, merged from the user's published blueprints (`listOwnBlueprints`) and their
 // library (`listLibraryBlueprints`). Mirrors the sidebar's SidebarBlueprintItem but adds the bits
@@ -122,7 +123,7 @@ function BlueprintRow({
 
 export default function BlueprintList() {
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
 
   const [items, setItems] = useState<BlueprintItem[]>([])
   const [search, setSearch] = useState('')

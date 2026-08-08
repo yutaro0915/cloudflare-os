@@ -18,6 +18,7 @@ import { formatInstanceInstructions } from "./admin-config";
 import type { AiGatewayLogRoute } from "./ai-gateway";
 import { AgentTurnError, completeText, httpStatusFromError, zeroUsage } from "./ai-invoke";
 import type { ModelHandle } from "./ai-models";
+import { appendAgentDefinitionInstructions, createReadSkillTool, filterAgentTools, type AgentDefinitionSnapshot } from "./agent-definition";
 import {
   buildCompactionState, buildSummaryPrompt, COMPACTION_SYSTEM_PROMPT, estimateProjectionTokens,
   findCompactionBoundary, findProtectedFromSequence, getModelTokenLimits, isCompactionTurn,
@@ -31,6 +32,10 @@ const logger = createWorkshopLogger("workshop.agent");
 export type AiChatAgentContext = {
   // Chat ID, corresponds to `chatMeta`.
   chatId: number;
+
+  // Custom agent definition snapshotted when this chat was created. Later edits to the user's
+  // saved definition affect only new chats.
+  agentDefinition?: AgentDefinitionSnapshot;
 
   // If present, this chat was spawned using a spawner, and this was the spawner config at the
   // time.
@@ -1670,6 +1675,12 @@ export async function runAgent(
                 case "giveUp":
                   toolOutput = {text: jsonToolResultText({rejected: true})};
                   break;
+                case "readSkill":
+                  if (toolCall.output === undefined) {
+                    throw new Error("readSkill tool call in log is missing output");
+                  }
+                  toolOutput = {text: toolCall.output};
+                  break;
                 case "webFetch":
                   if (toolCall.output === undefined) {
                     throw new Error("webFetch tool call in log is missing output");
@@ -2043,6 +2054,7 @@ export async function runAgent(
   };
 
   let agentContext = hooks.getChatAgentContext(chatId);
+  let agentDefinition = agentContext.agentDefinition ?? null;
   let emitStreamEvent = (event: AiChatStreamEvent) => {
     hooks.emitChatStreamEvent(chatId, event);
   };
@@ -2199,6 +2211,8 @@ export async function runAgent(
     ];
   }
 
+  systemPromptSlots[1] = appendAgentDefinitionInstructions(
+      systemPromptSlots[1], agentDefinition, agentContext.spawnerConfig !== undefined);
   let systemPrompt = `${systemPromptSlots[0]}\n\n${systemPromptSlots[1]}`;
 
   // Some models charge their response to the same window as the prompt, so the reservation is both
@@ -2838,6 +2852,11 @@ export async function runAgent(
       executeCode: tools.executeCode,
       ...(callbackInitiated ? {giveUp: tools.giveUp} : {}),
     };
+  }
+
+  tools = filterAgentTools(tools, agentDefinition?.tools ?? null);
+  if (!agentContext.spawnerConfig && agentDefinition?.skills.length) {
+    tools.readSkill = defineTool(createReadSkillTool(agentDefinition.skills));
   }
 
   let toolList = Object.values(tools);

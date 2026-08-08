@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useState, useEffect } from 'react'
-import { DropdownMenu, useKumoToastManager } from '@cloudflare/kumo'
+import { DropdownMenu } from '@cloudflare/kumo'
 import { useAuthenticatedApi } from '../AuthContext'
 import {
   AiChatAuthorInfo,
@@ -18,6 +18,7 @@ import {
 import AddModelModal from '../AddModelModal'
 import { useDocumentTitle } from '../useDocumentTitle'
 import { MENU_CONTENT, MENU_ITEM, MENU_ITEM_DANGER } from '../components/menuStyles'
+import { useToasts } from '../useToasts'
 
 export const Route = createFileRoute('/providers')({ component: ProvidersPage })
 
@@ -134,7 +135,7 @@ function ProvidersPage() {
   useDocumentTitle('AI Providers')
 
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
   const [models, setModels] = useState<AiChatAuthorInfo[]>([])
   const [quickModel, setQuickModel] = useState<string | null>(null)
   const [aiConfig, setAiConfig] = useState<AiGatewayInfo | null>(null)

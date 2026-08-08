@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CloudflareUsageInfo, CloudflareAccountOption } from '@gadgets/workshop-shared/api'
-import { Dialog, Button, Loader, useKumoToastManager } from '@cloudflare/kumo'
+import { Dialog, Button, Loader } from '@cloudflare/kumo'
 import { CloudWarning, Lightning } from '@phosphor-icons/react'
 import { useOptionalAuthenticatedApi } from '../../AuthContext'
 import { buildAddCreditsUrl } from './creditsUrl'
 import ResetCountdown from './ResetCountdown'
+import { useToasts } from '../../useToasts'
 
 interface OutOfCreditsModalProps {
   open: boolean
@@ -16,7 +17,7 @@ interface OutOfCreditsModalProps {
 // up credits in the Cloudflare dashboard (if connected but low balance).
 export default function OutOfCreditsModal({ open, onClose }: OutOfCreditsModalProps) {
   const auth = useOptionalAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
   const [usage, setUsage] = useState<CloudflareUsageInfo | null>(null)
   const [connecting, setConnecting] = useState(false)
   const [accounts, setAccounts] = useState<CloudflareAccountOption[] | null>(null)

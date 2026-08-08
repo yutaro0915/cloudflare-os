@@ -1,0 +1,38 @@
+name: claude
+
+# Interactive entry point of the self-improvement loop (starter
+# docs/self-improvement-loop-plan.md): @claude mentions by users with write access.
+# Unattended fixing on the `agent-fix` label lives in claude-fix.yml; PR auto-review
+# in claude-review.yml.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+
+jobs:
+  claude:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          branch_prefix: agent-fix/
+          base_branch: main

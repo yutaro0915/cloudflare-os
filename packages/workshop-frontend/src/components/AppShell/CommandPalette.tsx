@@ -6,11 +6,11 @@ import {
   Plus,
   SquaresFour,
 } from '@phosphor-icons/react'
-import { useKumoToastManager } from '@cloudflare/kumo'
 import { useAuthenticatedApi } from '../../AuthContext'
 import type { GadgetMetadataWithTimestamps, OutputFormatOffer } from '@gadgets/workshop-shared/api'
 import { FormatGlyph } from '../format/FormatVisuals'
 import { createFromFormat } from '../format/useOutputFormats'
+import { useToasts } from '../../useToasts'
 
 // A ⌘K command palette: jump to a workspace or a primary destination. Because it's keyboard-driven
 // and opened many times a day, it deliberately has *no* open/close animation (instant feels faster
@@ -142,7 +142,7 @@ export default function CommandPalette({
 }) {
   const { authenticatedApi } = useAuthenticatedApi()
   const navigate = useNavigate()
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
 
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)

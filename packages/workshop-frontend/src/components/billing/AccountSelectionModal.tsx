@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CloudflareUsageInfo, CloudflareAccountOption } from '@gadgets/workshop-shared/api'
-import { Dialog, Button, Loader, Radio, useKumoToastManager } from '@cloudflare/kumo'
+import { Dialog, Button, Loader, Radio } from '@cloudflare/kumo'
 import { Warning } from '@phosphor-icons/react'
 import { useOptionalAuthenticatedApi } from '../../AuthContext'
 import { useCloudflareLimitsEnabled } from '../../ServerConfigContext'
+import { useToasts } from '../../useToasts'
 
 // Global, mandatory modal that forces the user to pick which Cloudflare account to bill whenever
 // they're connected but have access to more than one account. Auto-opens (and re-opens) as long as
@@ -11,7 +12,7 @@ import { useCloudflareLimitsEnabled } from '../../ServerConfigContext'
 export default function AccountSelectionModal() {
   const limitsEnabled = useCloudflareLimitsEnabled()
   const auth = useOptionalAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
   const [needsSelection, setNeedsSelection] = useState(false)
   const [accounts, setAccounts] = useState<CloudflareAccountOption[] | null>(null)
   const [chosen, setChosen] = useState<string | undefined>(undefined)

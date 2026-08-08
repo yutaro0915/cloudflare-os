@@ -1,0 +1,56 @@
+name: claude-fix
+
+# Automation half of the fix agent: the `agent-fix` label queues an issue for a fully
+# unattended implement -> verify -> PR cycle (agent mode: prompt provided, runs immediately).
+# Interactive @claude mentions live in claude.yml; PR auto-review in claude-review.yml.
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+
+jobs:
+  fix:
+    if: github.event.label.name == 'agent-fix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+
+      # CI-only skills: local clones never get these auto-loaded (.claude/ is gitignored;
+      # the harness lives under .github/agents/ which nothing reads automatically).
+      - name: Materialize CI agent skills
+        run: mkdir -p .claude/skills && cp -R .github/agents/skills/. .claude/skills/
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          branch_prefix: agent-fix/
+          base_branch: main
+          prompt: |
+            Fix GitHub issue #${{ github.event.issue.number }} in this repository.
+
+            First read .github/agents/HARNESS.md and .github/agents/rubrics/fix.md and
+            follow them for the whole run.
+
+            Steps:
+            1. Read the issue with `gh issue view ${{ github.event.issue.number }}`.
+            2. Implement the fix per the rubric, verify per
+               .github/agents/playbooks/verify-before-pr.md.
+            3. Open a PR into main with
+               `gh pr create --base main --label automerge`, body starting
+               with "Closes #${{ github.event.issue.number }}" and a Verification section.
+               The automerge label queues the PR for the merge train (merge-train.yml),
+               which re-verifies CI against latest main and merges serially.
+            4. Comment the PR link on the issue.
+          claude_args: |
+            --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash(git:*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh pr create:*),Bash(pnpm:*),Bash(node:*),Bash(npx:*)"

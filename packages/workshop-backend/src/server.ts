@@ -1,7 +1,7 @@
 import { RpcStub, RpcTarget, newWorkersRpcResponse } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import type { JWTPayload } from "jose";
-import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES } from '@gadgets/workshop-shared/api';
+import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata } from '@gadgets/workshop-shared/api';
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
 import { getServerConfig } from "./deployment-config.js";
 import { isPasswordAuthEnabled, getAuthGatekeeperAllowlist } from "./auth/config.js";
@@ -19,6 +19,7 @@ import { getAiGatewayConfig } from "./ai-gateway.js";
 import { AdminSettings, AdminApiImpl } from "./admin-settings.js";
 import { BlueprintKvRecord, buildBlueprintArchiveStream, sanitizeBlueprintOutput, listFeaturedBlueprintsFromKv, parseBlueprintArchive, randomBlueprintId, readBlueprintContent, readBlueprintKvRecord } from "./blueprint-archive.js";
 import { GatekeeperConnectCallbackImpl, normalizeUsername, UserDurableObject, CLOUDFLARE_VENDOR_ID } from "./user";
+import { createSkillDefinition } from "./agent-definition";
 import { OverseerDurableObject, GatekeeperLoopback, CodeModeTailLoopback, AgentSpawnerGatekeeper, GatekeeperHookLoopback, GadgetTailLoopback, AgentSelfLoopback, TransientStubLoopback } from "./overseer";
 import { ExternalMessageGateway } from "./external-message-gateway";
 import { RpcStub as NativeRpcStub } from "cloudflare:workers";
@@ -127,6 +128,32 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   deleteModel(id: string): Promise<void> {
     return this.user.deleteModel(id);
   }
+  listAgentDefinitions(): Promise<AgentDefinition[]> {
+    return this.user.listAgentDefinitions();
+  }
+  saveAgentDefinition(definition: AgentDefinition): Promise<void> {
+    return this.user.saveAgentDefinition(definition);
+  }
+  deleteAgentDefinition(id: string): Promise<void> {
+    return this.user.deleteAgentDefinition(id);
+  }
+
+  listSkillDefinitions(): Promise<SkillDefinition[]> {
+    return this.user.listSkillDefinitions();
+  }
+
+  saveSkillDefinition(id: string, markdown: string): Promise<SkillDefinition> {
+    return this.user.saveSkillDefinition(id, markdown);
+  }
+
+  validateSkillMarkdown(markdown: string): Promise<SkillMetadata> {
+    let {name, description} = createSkillDefinition("validation", markdown);
+    return Promise.resolve({name, description});
+  }
+
+  deleteSkillDefinition(id: string): Promise<void> {
+    return this.user.deleteSkillDefinition(id);
+  }
   setQuickModel(id: string | null): Promise<void> {
     return this.user.setQuickModel(id);
   }
@@ -203,7 +230,8 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   }
 
   async #openGadgetInternal(id: string, shareKey?: string,
-                            configureObservers?: RpcStub<ObserverConfigCallback>)
+                            configureObservers?: RpcStub<ObserverConfigCallback>,
+                            agentPreview = false)
       : Promise<NativeRpcStub<Overseer>> {
     let userId = this.user.id.toString();
     let profileId = this.user.id.name!;
@@ -241,7 +269,8 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
 
     let result;
     try {
-      result = await overseer.open(userId, profileId, notifyClosed, shareKey, configureObservers);
+      result = await overseer.open(
+          userId, profileId, notifyClosed, shareKey, configureObservers, agentPreview);
     } catch (err) {
       // A denial proves this user's listing for the workspace is stale: revocation tries to drop it
       // (refreshAffectedCollaboratorListings), but that push is best-effort. Only catches entries
@@ -283,6 +312,20 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       throw new Error("Open failed despite newly-created workspace?");
     }
     return result;
+  }
+
+  async openAgentPreview(): Promise<RpcStub<Overseer>> {
+    let id = this.overseers.idFromName(`agent-preview:${this.user.id.toString()}`).toString();
+    await this.user.ensureAgentPreviewGadget(id);
+    // @ts-expect-error Cap'n Web RPC stubs and native RPC stubs are compatible but the type
+    //     system doesn't know this.
+    return this.#openGadgetInternal(id, undefined, undefined, true);
+  }
+
+  async startAgentPreviewChat(initialMessage: string, definition: AgentDefinition): Promise<number> {
+    let userId = this.user.id.toString();
+    let overseerId = this.overseers.idFromName(`agent-preview:${userId}`);
+    return this.overseers.get(overseerId).startAgentPreviewChat(userId, initialMessage, definition);
   }
 
   async listGadgets(): Promise<GadgetMetadataWithTimestamps[]> {

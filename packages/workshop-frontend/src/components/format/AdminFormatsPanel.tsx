@@ -8,7 +8,7 @@
 // plural and icon, and clearing an override falls back to it.
 
 import { useEffect, useMemo, useState } from 'react'
-import { Button, DropdownMenu, Input, Switch, useKumoToastManager } from '@cloudflare/kumo'
+import { Button, DropdownMenu, Input, Switch } from '@cloudflare/kumo'
 import { ArrowDown, ArrowUp, CaretDown, CaretRight, Plus, Sparkle, Trash, Warning } from '@phosphor-icons/react'
 import type {
   AdminApi,
@@ -22,6 +22,7 @@ import { useAuthenticatedApi } from '../../AuthContext'
 import { MENU_CONTENT } from '../menuStyles'
 import { FORMAT_ICONS, GENERIC_OUTPUT } from './formats'
 import { FormatGlyph, FormatPreview } from './FormatVisuals'
+import { useToasts } from '../../useToasts'
 
 // A blueprint the admin could promote. `declared` is what it says it produces, when we know --
 // known for the deployment's featured blueprints, unknown for the admin's own published ones.
@@ -39,7 +40,7 @@ export default function AdminFormatsPanel({
   onChanged: () => Promise<void>
 }) {
   const { authenticatedApi } = useAuthenticatedApi()
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
   const [busy, setBusy] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [candidates, setCandidates] = useState<Promotable[]>([])

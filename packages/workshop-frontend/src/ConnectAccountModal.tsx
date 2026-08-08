@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Dialog, Text, Loader, useKumoToastManager } from '@cloudflare/kumo'
+import { Dialog, Text, Loader } from '@cloudflare/kumo'
 import { RpcStub } from 'capnweb'
 import { AuthenticatedApi, GatekeeperVendorFilter } from '@gadgets/workshop-shared/api'
 import { VendorDescription } from '@gadgets/workshop-shared/gatekeeper'
 import VendorCard from './VendorCard'
+import { useToasts } from './useToasts'
 
 interface ConnectAccountModalProps {
   visible: boolean
@@ -26,7 +27,7 @@ export default function ConnectAccountModal({
   authenticatedApi,
   filter,
 }: ConnectAccountModalProps) {
-  const toasts = useKumoToastManager()
+  const toasts = useToasts()
   const [connecting, setConnecting] = useState<string | null>(null)
   const [vendors, setVendors] = useState<VendorOption[]>([])
   const [vendorsLoading, setVendorsLoading] = useState(true)
