@@ -29,6 +29,7 @@ scope: stop, comment your findings on the issue, and add the `needs-human` label
 
 ## References (read on demand)
 
+- rubrics/flow.md — branching / environments / release flow (SSOT for the whole loop)
 - rubrics/fix.md — what a good fix looks like (fix agent reads this every run)
 - rubrics/review.md — what a good review looks like (review agent reads this every run)
 - playbooks/verify-before-pr.md — build/lint/test commands and fresh-checkout gotchas

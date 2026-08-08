@@ -52,5 +52,9 @@ jobs:
                The automerge label queues the PR for the merge train (merge-train.yml),
                which re-verifies CI against latest main and merges serially.
             4. Comment the PR link on the issue.
+            5. After the PR exists, a preview fleet deploys automatically and its URL
+               appears as a sticky comment on the PR. When the fix is user-visible,
+               verify it there per .github/agents/playbooks/repro-playwright.md and
+               add the evidence to the PR's Verification section.
           claude_args: |
             --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash(git:*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh pr create:*),Bash(pnpm:*),Bash(node:*),Bash(npx:*)"

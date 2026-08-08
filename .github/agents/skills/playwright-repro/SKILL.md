@@ -10,11 +10,14 @@ This skill exists only in CI: the workflow copies `.github/agents/skills/` into
 
 ## Steps
 
-1. **Server**: `pnpm run build && pnpm run-local &` — app on http://localhost:8787.
+1. **Target**: prefer the PR's preview fleet URL (sticky "preview-env" comment on
+   the PR — a live workers.dev deployment of your branch). Before the PR exists,
+   fall back to local: `pnpm run build && pnpm run-local &` → http://localhost:8787.
    Wait for a 200 from `/` before driving the browser.
-2. **Login**: use the CI seed account (created by `CI_SEED_USERNAME` /
-   `CI_SEED_PASSWORD` env if provided by the workflow). If no seed account is
-   available, say so on the issue and fall back to code-level verification.
+2. **Login**: on a preview fleet, sign up a throwaway account (fresh previews have
+   signups enabled; use an obviously-disposable username like `ci-check`). Locally,
+   sign up the same way. If login is impossible, say so on the issue and fall back
+   to code-level verification.
 3. **Script**: `npx playwright test` with a spec that follows the issue's numbered
    repro steps exactly. Assert the *expected* behavior — so the test FAILS while the
    bug exists.

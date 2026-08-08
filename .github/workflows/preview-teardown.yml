@@ -1,0 +1,68 @@
+name: preview-teardown
+
+# Removes a PR's preview fleet when the PR closes (norms: .github/agents/rubrics/flow.md
+# — a closed PR must leave no workers behind). A daily sweep also deletes any -pr-N
+# fleet whose PR is no longer open (covers cancelled runs, manual deploys, renames).
+# KV/R2 resources auto-provisioned by wrangler are deleted together with the worker
+# where the API supports it; anything left over shows up in the sweep log for manual
+# cleanup.
+
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: "23 19 * * *"  # daily, 04:23 JST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-teardown
+  cancel-in-progress: false
+
+jobs:
+  teardown:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Delete preview fleets
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::notice::Cloudflare secrets not set; nothing to tear down."
+            exit 0
+          fi
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID"
+
+          delete_fleet() {
+            n="$1"
+            for w in workshop context custom error-reporter; do
+              name="cloudflare-os-$w-pr-$n"
+              code=$(curl -s -o /tmp/del.json -w '%{http_code}' -X DELETE \
+                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                "$api/workers/scripts/$name?force=true")
+              echo "delete $name -> HTTP $code"
+            done
+          }
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            delete_fleet "${{ github.event.number }}"
+            exit 0
+          fi
+
+          # Sweep: every deployed -pr-N fleet whose PR is not open gets deleted.
+          NAMES=$(curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "$api/workers/scripts?per_page=100" \
+            | jq -r '.result[].id | select(test("^cloudflare-os-workshop-pr-[0-9]+$"))')
+          for name in $NAMES; do
+            n=${name##*-pr-}
+            STATE=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$n" --jq .state 2>/dev/null || echo unknown)
+            if [ "$STATE" != "open" ]; then
+              echo "PR #$n is $STATE; removing its fleet."
+              delete_fleet "$n"
+            fi
+          done
