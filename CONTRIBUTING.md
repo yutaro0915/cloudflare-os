@@ -25,3 +25,5 @@ This repo follows a develop-only PR flow so humans and agents work the same way.
 We are not seeking outside contribution beyond the above. We accept small,
 trivially-verified PRs that fix a problem; please avoid low-value PRs (e.g. typo
 fixes) or PRs larger than a dozen or so lines.
+
+<!-- merge-train smoke test 2026-08-08 -->
