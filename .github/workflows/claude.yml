@@ -1,10 +1,9 @@
 name: claude
 
-# The fix agent of the self-improvement loop (starter docs/self-improvement-loop-plan.md).
-# Triggers: @claude mentions by users with write access, or the `agent-fix` label set by
-# triage. Claude reads the issue, implements on a branch, and opens a PR into develop
-# (repo default branch). Merging stays human: CI + the pr-from-develop guard + the merge
-# train gate everything after this point.
+# Interactive entry point of the self-improvement loop (starter
+# docs/self-improvement-loop-plan.md): @claude mentions by users with write access.
+# Unattended fixing on the `agent-fix` label lives in claude-fix.yml; PR auto-review
+# in claude-review.yml.
 
 on:
   issue_comment:
@@ -12,7 +11,7 @@ on:
   pull_request_review_comment:
     types: [created]
   issues:
-    types: [opened, assigned, labeled]
+    types: [opened, assigned]
   pull_request_review:
     types: [submitted]
 
@@ -25,8 +24,6 @@ permissions:
 
 jobs:
   claude:
-    # Mentions always considered; label events only act on `agent-fix`.
-    if: github.event_name != 'issues' || github.event.action != 'labeled' || github.event.label.name == 'agent-fix'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -37,6 +34,5 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          label_trigger: agent-fix
           branch_prefix: agent-fix/
           base_branch: develop
