@@ -1,0 +1,46 @@
+# Structured bug report. This template doubles as the spec for the in-app "Report a bug"
+# feature (reportBug RPC): the app will file issues that fill exactly these fields, so
+# triage/fix agents can rely on the structure regardless of whether a human or the hub filed it.
+name: Bug report
+description: Something broke or behaved unexpectedly
+labels: [auto-report]
+body:
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Which deployment, browser, and account type
+      placeholder: "os-dev.cherie-lab.com / Chrome 139 / member account"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps from a fresh page load
+      placeholder: |
+        1. Open /agents
+        2. Kill the network connection
+        3. Wait 60 seconds
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include exact error text / toast titles if any
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence (optional)
+      description: Console errors, screenshots, network failures, fingerprint from the app's error reporter
+    validations:
+      required: false

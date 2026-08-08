@@ -1,0 +1,46 @@
+name: ci
+
+# Required gate for the self-improvement loop (docs/self-improvement-loop-plan.md in the
+# starter repo): every PR into develop must be GREEN here before the merge train takes it.
+# Same checks agents and humans run locally: lint + types, tests, build.
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Lint + type check
+        run: pnpm run lint
+
+      - name: Tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm run build
