@@ -24,6 +24,8 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  # Self re-dispatch (gh workflow run) needs this; without it the tail-call 403s.
+  actions: write
 
 jobs:
   train:
