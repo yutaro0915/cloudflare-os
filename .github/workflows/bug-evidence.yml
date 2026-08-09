@@ -5,15 +5,23 @@ name: Bug Evidence
 
 on:
   issues:
-    types: [labeled]
+    # GitHub does not reliably emit a separate `labeled` event for labels included in the
+    # create-issue API call, so also react to `opened` and check the label set in the job `if`.
+    types: [opened, labeled]
 
 permissions:
   contents: write
   issues: write
 
+# Queue runs so two near-simultaneous reports don't race on the bug-assets push.
+concurrency:
+  group: bug-evidence
+
 jobs:
   capture:
-    if: github.event.label.name == 'bug-report'
+    if: >-
+      contains(github.event.issue.labels.*.name, 'bug-report') ||
+      github.event.label.name == 'bug-report'
     runs-on: ubuntu-latest
     steps:
       - name: Extract route from issue body
@@ -21,8 +29,11 @@ jobs:
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
-          # The in-app report puts "- Route: /path" in the body. Fall back to "/".
-          route="$(printf '%s\n' "$ISSUE_BODY" | sed -n 's/^- Route: \(\/[^ ]*\).*$/\1/p' | head -1)"
+          # The in-app report puts "- Route: /path" in the auto-collected section, which the
+          # backend renders FIRST in the body (user text is fenced and comes later), so the
+          # first match is the trusted one. Restrict to a conservative path charset; fall
+          # back to "/".
+          route="$(printf '%s\n' "$ISSUE_BODY" | sed -n 's/^- Route: \(\/[A-Za-z0-9./_~%?=\&-]*\)$/\1/p' | head -1)"
           [ -n "$route" ] || route="/"
           echo "route=$route" >> "$GITHUB_OUTPUT"
 
@@ -55,7 +66,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           name="issue-${ISSUE_NUMBER}-${GITHUB_RUN_ID}.png"
-          if git fetch origin bug-assets 2>/dev/null; then
+          # actions/checkout configures a narrow refspec, so name the destination ref
+          # explicitly — a bare `git fetch origin bug-assets` would only set FETCH_HEAD.
+          if git fetch origin bug-assets:refs/remotes/origin/bug-assets 2>/dev/null; then
             git checkout -B bug-assets origin/bug-assets
           else
             git checkout --orphan bug-assets

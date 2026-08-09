@@ -2,6 +2,7 @@ import { RpcStub } from "capnweb";
 import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, SUGGESTED_MODELS, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, BlueprintOutput, OutputSummary, WorkpieceId, ListOutputsResult, type AgentDefinition, type SkillDefinition } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, GatekeeperUser, GatekeeperUserVerifier, GatekeeperVendor, AccountDescription, VendorDescription, GatekeeperConnectCallback, SupportedResource, ResourceConfiguratorFrame, AppUiContext, GatekeeperUiFrame } from "@gadgets/workshop-shared/gatekeeper";
 import { shouldAutoProvisionAccount, ambientGatekeeperMode } from "./provisioning-policy.js";
+import { updateBugReportWindow } from "./bug-report.js";
 import { CloudflareGatekeeperUser } from "@gadgets/workshop-shared/cloudflare-gatekeeper";
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { createTypedStorage, collection } from "@gadgets/typed-storage";
@@ -231,6 +232,10 @@ function makeUserStorage(storage: DurableObjectStorage) {
       // Stores the current UTC day and the calls made that day; a stale `day` implicitly resets the
       // count. Folds the former standalone RateLimitDO into the user object.
       dailyLlmCount: <{ day: string; count: number } | null>null,
+
+      // Timestamps (ms) of this user's recent bug report submissions, for the sliding-window
+      // rate limit in claimBugReportSlot(). Pruned to the window on every claim.
+      bugReportTimestamps: <number[]>[],
 
       // `passwordHash` value as passed to `login()`, but with an extra round of SHA-256 applied.
       //
@@ -801,6 +806,16 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     this.storage.dailyLlmCount.put({ day, count: newUsed });
     return { withinLimits: true, remaining: Math.max(0, limit - newUsed), limit, used: newUsed,
              resetAt: nextUtcMidnightIso() };
+  }
+
+  // Sliding-window rate limit for in-app bug reports: at most `limit` submissions per
+  // `windowMs`. Atomically claims a slot (single-threaded DO execution makes the
+  // read-modify-write race-free); returns false without claiming when the window is full.
+  async claimBugReportSlot(limit: number, windowMs: number): Promise<boolean> {
+    let { allowed, timestamps } = updateBugReportWindow(
+      this.storage.bugReportTimestamps.get(), Date.now(), limit, windowMs);
+    this.storage.bugReportTimestamps.put(timestamps);
+    return allowed;
   }
 
   // DO NOT MAKE PUBLIC -- returns API keys.

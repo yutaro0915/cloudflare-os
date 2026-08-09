@@ -156,6 +156,11 @@ describe('BugReportModal', () => {
     await act(async () => { submitButton().click() })
 
     expect(toastAdd).toHaveBeenCalledWith(expect.objectContaining({ variant: 'error' }))
+    // The failure must also be visible inside the modal itself, in Japanese, including the
+    // server-provided reason (e.g. token not configured / rate limited).
+    const alert = container.querySelector('[role="alert"]')
+    expect(alert?.textContent).toContain('バグ報告の送信に失敗しました')
+    expect(alert?.textContent).toContain('boom')
   })
 })
 

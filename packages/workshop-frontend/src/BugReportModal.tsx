@@ -110,6 +110,7 @@ export default function BugReportModal({ visible, onClose, authenticatedApi }: B
   const [picked, setPicked] = useState<PickedElement | null>(null)
   const [picking, setPicking] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   // Reset the form each time the modal is opened fresh.
   useEffect(() => {
@@ -119,6 +120,7 @@ export default function BugReportModal({ visible, onClose, authenticatedApi }: B
       setPicked(null)
       setPicking(false)
       setSubmitting(false)
+      setErrorMessage(null)
     }
   }, [visible])
 
@@ -133,6 +135,7 @@ export default function BugReportModal({ visible, onClose, authenticatedApi }: B
   const handleSubmit = async () => {
     if (!canSubmit) return
     setSubmitting(true)
+    setErrorMessage(null)
     try {
       const result = await authenticatedApi.submitBugReport({
         description: description.trim(),
@@ -146,6 +149,11 @@ export default function BugReportModal({ visible, onClose, authenticatedApi }: B
       onClose()
     } catch (error) {
       console.error('Failed to submit bug report:', error)
+      // Show the failure inside the modal too (toasts can be missed): a generic Japanese
+      // message, plus the server's reason when it provides one (e.g. not configured /
+      // rate limited).
+      const detail = error instanceof Error && error.message ? ` (${error.message})` : ''
+      setErrorMessage(`バグ報告の送信に失敗しました。時間をおいて再度お試しください。${detail}`)
       toasts.add({ title: 'バグ報告の送信に失敗しました。時間をおいて再度お試しください。', variant: 'error' })
       setSubmitting(false)
     }
@@ -201,6 +209,15 @@ export default function BugReportModal({ visible, onClose, authenticatedApi }: B
               checked={confirmed}
               onCheckedChange={(checked) => setConfirmed(checked === true)}
             />
+
+            {errorMessage && (
+              <div
+                role="alert"
+                className="rounded-lg border border-kumo-danger/40 bg-kumo-danger-tint px-3 py-2 text-[12px] text-kumo-danger"
+              >
+                {errorMessage}
+              </div>
+            )}
 
             <div className="flex justify-end gap-2">
               <WorkshopButton onClick={onClose} disabled={submitting}>

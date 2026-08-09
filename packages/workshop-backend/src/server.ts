@@ -632,6 +632,11 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   }
 
   async submitBugReport(report: BugReportInput): Promise<BugReportResult> {
+    // Per-user sliding-window rate limit: at most 3 reports per 10 minutes.
+    if (!await this.user.claimBugReportSlot(3, 10 * 60 * 1000)) {
+      throw new Error(
+        "バグ報告の送信回数が上限に達しました（10 分間に 3 件まで）。時間をおいて再度お試しください。");
+    }
     let profile = await this.user.whoami();
     return createBugReportIssue(this.env, { id: profile.id, name: profile.name }, report);
   }
