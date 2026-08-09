@@ -50,4 +50,5 @@ jobs:
           claude_args: |
             --model claude-opus-5
             --effort medium
+            --append-system-prompt "ユーザーに見える出力（レビュー本文・PR コメント・inline コメント）はすべて日本語（です・ます調）で書いてください。コード・技術用語・コマンドは英語のままで構いません。"
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(gh pr edit:*)"
