@@ -53,6 +53,11 @@ declare global {
       // unaffected. OAuth app credentials live on the gatekeeper Workers, not here.
       // ---------------------------------------------------------------------------------------------
 
+      // Secret: fine-grained GitHub PAT with issues:write on the source repository, used by the
+      // in-app bug report feature to file issues (src/bug-report.ts). Optional; when unset,
+      // bug report submission fails with a clear "not configured" error.
+      GITHUB_BUG_REPORT_TOKEN?: string;
+
       // Cloudflare Access configuration. When CF_ACCESS_AUD is set, the deployment authenticates via
       // Cloudflare Access (SSO). (Also referenced via a local Env extension in server.ts.)
       CF_ACCESS_AUD?: string;   // audience

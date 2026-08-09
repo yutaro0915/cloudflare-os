@@ -1,0 +1,82 @@
+# Bug evidence collector: when an issue is labeled `bug-report` (filed by the in-app bug report
+# feature), best-effort capture a screenshot of the reported route on production and attach it to
+# the issue as a comment. Screenshots are stored on the orphan `bug-assets` branch.
+name: Bug Evidence
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  capture:
+    if: github.event.label.name == 'bug-report'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract route from issue body
+        id: route
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          # The in-app report puts "- Route: /path" in the body. Fall back to "/".
+          route="$(printf '%s\n' "$ISSUE_BODY" | sed -n 's/^- Route: \(\/[^ ]*\).*$/\1/p' | head -1)"
+          [ -n "$route" ] || route="/"
+          echo "route=$route" >> "$GITHUB_OUTPUT"
+
+      - name: Take screenshot (best effort)
+        id: shot
+        continue-on-error: true
+        env:
+          ROUTE: ${{ steps.route.outputs.route }}
+        run: |
+          npm install --no-save playwright@1.50.1
+          npx playwright install --with-deps chromium
+          npx playwright screenshot --browser=chromium --viewport-size=1280,800 \
+            --wait-for-timeout=8000 "https://os.cherie-lab.com${ROUTE}" screenshot.png
+          echo "captured=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout bug-assets branch
+        if: steps.shot.outputs.captured == 'true'
+        uses: actions/checkout@v4
+        with:
+          path: repo
+          fetch-depth: 1
+
+      - name: Push screenshot to bug-assets branch
+        if: steps.shot.outputs.captured == 'true'
+        id: push
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          cd repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          name="issue-${ISSUE_NUMBER}-${GITHUB_RUN_ID}.png"
+          if git fetch origin bug-assets 2>/dev/null; then
+            git checkout -B bug-assets origin/bug-assets
+          else
+            git checkout --orphan bug-assets
+            git rm -rfq . || true
+          fi
+          mkdir -p screenshots
+          cp ../screenshot.png "screenshots/${name}"
+          git add "screenshots/${name}"
+          git commit -m "bug-evidence: screenshot for issue #${ISSUE_NUMBER}"
+          git push origin bug-assets
+          echo "asset_path=screenshots/${name}" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on issue
+        if: steps.shot.outputs.captured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ROUTE: ${{ steps.route.outputs.route }}
+          ASSET_PATH: ${{ steps.push.outputs.asset_path }}
+        run: |
+          url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/bug-assets/${ASSET_PATH}"
+          # shellcheck disable=SC2016  # the backticked route is markdown, not shell expansion
+          body="$(printf '自動収集した証跡です。本番環境の `%s` のスクリーンショットを添付します（ログインが必要な画面の場合はログイン画面が写ります）。\n\n![screenshot](%s)' "$ROUTE" "$url")"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$body"
