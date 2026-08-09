@@ -28,8 +28,9 @@ export type BugReportEnv = {
   GITHUB_BUG_REPORT_TOKEN?: string;
 };
 
+// Only the display name — never the account id (typically an email address), which must not
+// appear in a public issue.
 export type BugReporterInfo = {
-  id: string;
   name: string;
 };
 
@@ -85,7 +86,7 @@ export function formatBugReportIssueBody(report: BugReportInput, reporter: BugRe
     `- Route: ${sanitizeRoute(report.route)}`,
     `- UserAgent: \`${inlineValue(report.userAgent, MAX_USER_AGENT_CHARS)}\``,
     `- Viewport: ${viewport.width}x${viewport.height}`,
-    `- 報告ユーザー: \`${inlineValue(reporter.name, 200)} (${inlineValue(reporter.id, 200)})\``,
+    `- 報告ユーザー: \`${inlineValue(reporter.name, 200)}\``,
   ];
   if (selector) {
     lines.push(`- 対象要素セレクタ: \`${selector}\``);
@@ -121,6 +122,38 @@ export function updateBugReportWindow(
     return { allowed: false, timestamps: recent };
   }
   return { allowed: true, timestamps: [...recent, now] };
+}
+
+// Checks that must fail BEFORE a rate-limit slot is consumed: a submission that can never
+// succeed (missing token, empty description) should not count against the user's window.
+export function assertBugReportSubmittable(env: BugReportEnv, report: BugReportInput): void {
+  if (!capString(report.description, MAX_DESCRIPTION_CHARS).trim()) {
+    throw new Error("Bug report description must not be empty.");
+  }
+  if (!env.GITHUB_BUG_REPORT_TOKEN) {
+    // 501-equivalent: the deployment has not configured bug reporting.
+    throw new Error(
+      "Bug reporting is not configured on this deployment " +
+      "(missing GITHUB_BUG_REPORT_TOKEN secret).",
+    );
+  }
+}
+
+// Full submission flow in dependency-injectable form: validate first, then claim a rate-limit
+// slot, then create the issue. Order matters — see assertBugReportSubmittable.
+export async function submitBugReportFlow(
+  env: BugReportEnv,
+  reporter: BugReporterInfo,
+  report: BugReportInput,
+  claimSlot: () => Promise<boolean>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<BugReportResult> {
+  assertBugReportSubmittable(env, report);
+  if (!await claimSlot()) {
+    throw new Error(
+      "バグ報告の送信回数が上限に達しました（10 分間に 3 件まで）。時間をおいて再度お試しください。");
+  }
+  return createBugReportIssue(env, reporter, report, fetchImpl);
 }
 
 // Create a GitHub issue for the report. `fetchImpl` is injectable for tests.

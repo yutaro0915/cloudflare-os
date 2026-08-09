@@ -202,6 +202,7 @@ export default function BugReportModal({ visible, onClose, authenticatedApi }: B
               <div>
                 Viewport: {typeof window !== 'undefined' ? `${window.innerWidth}x${window.innerHeight}` : ''}
               </div>
+              <div>Your account display name will appear on the public GitHub issue.</div>
             </div>
 
             <Checkbox

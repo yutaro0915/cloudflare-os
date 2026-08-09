@@ -2,7 +2,7 @@ import { RpcStub, RpcTarget, newWorkersRpcResponse } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import type { JWTPayload } from "jose";
 import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult } from '@gadgets/workshop-shared/api';
-import { createBugReportIssue } from "./bug-report.js";
+import { submitBugReportFlow } from "./bug-report.js";
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
 import { getServerConfig } from "./deployment-config.js";
 import { isPasswordAuthEnabled, getAuthGatekeeperAllowlist } from "./auth/config.js";
@@ -632,13 +632,12 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   }
 
   async submitBugReport(report: BugReportInput): Promise<BugReportResult> {
-    // Per-user sliding-window rate limit: at most 3 reports per 10 minutes.
-    if (!await this.user.claimBugReportSlot(3, 10 * 60 * 1000)) {
-      throw new Error(
-        "バグ報告の送信回数が上限に達しました（10 分間に 3 件まで）。時間をおいて再度お試しください。");
-    }
     let profile = await this.user.whoami();
-    return createBugReportIssue(this.env, { id: profile.id, name: profile.name }, report);
+    // Validation happens before the per-user rate-limit slot (3 per 10 minutes) is consumed;
+    // only the display name is passed on — the account id (often an email) must not reach the
+    // public issue.
+    return submitBugReportFlow(this.env, { name: profile.name }, report,
+        () => this.user.claimBugReportSlot(3, 10 * 60 * 1000));
   }
 }
 

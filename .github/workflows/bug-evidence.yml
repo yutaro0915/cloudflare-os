@@ -13,18 +13,39 @@ permissions:
   contents: write
   issues: write
 
-# Queue runs so two near-simultaneous reports don't race on the bug-assets push.
+# Per-issue queue: serializes the opened/labeled double fire for one issue while letting
+# different issues run in parallel; the bug-assets push tolerates cross-issue races via the
+# marker-comment idempotency check below plus git's non-fast-forward failure being best-effort.
 concurrency:
-  group: bug-evidence
+  group: bug-evidence-${{ github.event.issue.number }}
 
 jobs:
   capture:
+    # An API-created issue may fire `opened` (labels already attached) and/or a separate
+    # `labeled` event; match each event only against its own trigger so one issue can't
+    # qualify twice through the same event.
     if: >-
-      contains(github.event.issue.labels.*.name, 'bug-report') ||
-      github.event.label.name == 'bug-report'
+      (github.event.action == 'opened' && contains(github.event.issue.labels.*.name, 'bug-report')) ||
+      (github.event.action == 'labeled' && github.event.label.name == 'bug-report')
     runs-on: ubuntu-latest
     steps:
+      - name: Skip if evidence was already attached
+        id: dedupe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          # Idempotency across the opened+labeled double fire: the evidence comment carries a
+          # marker; if it is already present, do nothing.
+          if gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --json comments --jq '.comments[].body' | grep -qF '<!-- bug-evidence -->'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Extract route from issue body
+        if: steps.dedupe.outputs.skip != 'true'
         id: route
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
@@ -33,11 +54,12 @@ jobs:
           # backend renders FIRST in the body (user text is fenced and comes later), so the
           # first match is the trusted one. Restrict to a conservative path charset; fall
           # back to "/".
-          route="$(printf '%s\n' "$ISSUE_BODY" | sed -n 's/^- Route: \(\/[A-Za-z0-9./_~%?=\&-]*\)$/\1/p' | head -1)"
+          route="$(printf '%s\n' "$ISSUE_BODY" | sed -n 's/^- Route: \(\/[A-Za-z0-9./_~%?=&-]*\)$/\1/p' | head -1)"
           [ -n "$route" ] || route="/"
           echo "route=$route" >> "$GITHUB_OUTPUT"
 
       - name: Take screenshot (best effort)
+        if: steps.dedupe.outputs.skip != 'true'
         id: shot
         continue-on-error: true
         env:
@@ -91,5 +113,5 @@ jobs:
         run: |
           url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/bug-assets/${ASSET_PATH}"
           # shellcheck disable=SC2016  # the backticked route is markdown, not shell expansion
-          body="$(printf '自動収集した証跡です。本番環境の `%s` のスクリーンショットを添付します（ログインが必要な画面の場合はログイン画面が写ります）。\n\n![screenshot](%s)' "$ROUTE" "$url")"
+          body="$(printf '<!-- bug-evidence -->\n自動収集した証跡です。本番環境の `%s` のスクリーンショットを添付します（ログインが必要な画面の場合はログイン画面が写ります）。\n\n![screenshot](%s)' "$ROUTE" "$url")"
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$body"
