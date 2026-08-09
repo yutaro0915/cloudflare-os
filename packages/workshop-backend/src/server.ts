@@ -1,8 +1,9 @@
 import { RpcStub, RpcTarget, newWorkersRpcResponse } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import type { JWTPayload } from "jose";
-import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult } from '@gadgets/workshop-shared/api';
-import { submitBugReportFlow } from "./bug-report.js";
+import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult, type MyBugReportsResult } from '@gadgets/workshop-shared/api';
+import { submitBugReportFlow, refreshBugReportStatuses, bugReportIssueUrl,
+         BUG_REPORT_STATUS_CACHE_MS } from "./bug-report.js";
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
 import { getServerConfig } from "./deployment-config.js";
 import { isPasswordAuthEnabled, getAuthGatekeeperAllowlist } from "./auth/config.js";
@@ -636,10 +637,44 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     // Validation happens before the per-user rate-limit slot (3 per 10 minutes) is consumed;
     // only the display name is passed on — the account id (often an email) must not reach the
     // public issue.
-    return submitBugReportFlow(this.env, { name: profile.name }, report,
+    let result = await submitBugReportFlow(this.env, { name: profile.name }, report,
         () => this.user.claimBugReportSlot(3, 10 * 60 * 1000),
         fetch,
         () => this.user.releaseBugReportSlot());
+    await this.user.recordBugReport(result.issueNumber, result.title);
+    return result;
+  }
+
+  async listMyBugReports(): Promise<MyBugReportsResult> {
+    let { records, fetchedAt, seenAt } = await this.user.getBugReportSyncState();
+    // GitHub is queried only when the panel opens and the cache is stale; rapid re-opens are
+    // served from the stored state.
+    if (records.length > 0 && Date.now() - fetchedAt > BUG_REPORT_STATUS_CACHE_MS) {
+      let refreshed = await refreshBugReportStatuses(this.env, records, Date.now());
+      await this.user.putBugReportRecords(refreshed);
+      records = refreshed;
+    }
+    return {
+      reports: records.map(record => ({
+        issueNumber: record.issueNumber,
+        issueUrl: bugReportIssueUrl(record.issueNumber),
+        title: record.title,
+        createdAt: record.createdAt,
+        status: this.env.GITHUB_BUG_REPORT_TOKEN ? record.status : "unknown",
+        pr: record.pr,
+      })),
+      unreadCount: records
+          .filter(record => record.status !== "reported" && record.statusChangedAt > seenAt)
+          .length,
+    };
+  }
+
+  getBugReportUnreadCount(): Promise<number> {
+    return this.user.getBugReportUnreadCount();
+  }
+
+  markBugReportsSeen(): Promise<void> {
+    return this.user.markBugReportsSeen();
   }
 }
 

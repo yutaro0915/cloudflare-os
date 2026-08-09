@@ -9,7 +9,9 @@
 // - free text goes inside code fences whose length adapts to the content, so user backticks
 //   cannot close the fence;
 // - "@" is neutralized with a zero-width space so "@claude" / mass mentions never trigger.
-import type { BugReportInput, BugReportResult } from "@gadgets/workshop-shared/api";
+import type {
+  BugReportInput, BugReportLinkedPr, BugReportResult, BugReportStatus,
+} from "@gadgets/workshop-shared/api";
 
 export const BUG_REPORT_REPO = "yutaro0915/cloudflare-os";
 export const BUG_REPORT_LABEL = "bug-report";
@@ -197,9 +199,132 @@ export async function createBugReportIssue(
     throw new Error(`Failed to create GitHub issue (status ${response.status}): ${detail}`);
   }
 
-  const issue = await response.json() as { html_url?: string };
-  if (typeof issue.html_url !== "string") {
+  const issue = await response.json() as { html_url?: string; number?: number };
+  if (typeof issue.html_url !== "string" || typeof issue.number !== "number") {
     throw new Error("GitHub issue creation returned an unexpected response.");
   }
-  return { issueUrl: issue.html_url };
+  return { issueUrl: issue.html_url, issueNumber: issue.number, title };
+}
+
+// ================================================================================================
+// Reporter-side progress tracking ("My reports"): stored records + GitHub state resolution.
+
+// One stored record in the user DO, updated whenever fresh GitHub state is fetched.
+export type StoredBugReport = {
+  issueNumber: number;
+  title: string;
+  createdAt: number;          // ms since epoch
+  status: BugReportStatus;    // last-known status ("unknown" until first successful fetch)
+  statusChangedAt: number;    // when `status` last changed, for the unread badge
+  pr?: BugReportLinkedPr;
+};
+
+export const MAX_STORED_BUG_REPORTS = 50;
+
+// Refresh GitHub state at most once per minute per user; the panel triggers the fetch, so this
+// only bounds rapid re-opens.
+export const BUG_REPORT_STATUS_CACHE_MS = 60_000;
+
+export function bugReportIssueUrl(issueNumber: number): string {
+  return `https://github.com/${BUG_REPORT_REPO}/issues/${issueNumber}`;
+}
+
+// Prepend a new record, keeping the list newest-first and bounded.
+export function appendBugReportRecord(
+  records: StoredBugReport[], record: StoredBugReport,
+): StoredBugReport[] {
+  return [record, ...records].slice(0, MAX_STORED_BUG_REPORTS);
+}
+
+// Derive the reporter-facing status from GitHub state. A merged linked PR wins; an open one
+// means work in progress; a closed issue with nothing merged means the report was declined.
+export function deriveBugReportStatus(
+  issueState: "open" | "closed", linkedPrs: BugReportLinkedPr[],
+): BugReportStatus {
+  if (linkedPrs.some(pr => pr.merged)) return "merged";
+  if (linkedPrs.some(pr => pr.state === "open")) return "pr_open";
+  if (issueState === "closed") return "closed";
+  return "reported";
+}
+
+// Pick the most relevant linked PR to surface: a merged one, else an open one, else the first.
+export function pickRelevantPr(linkedPrs: BugReportLinkedPr[]): BugReportLinkedPr | undefined {
+  return linkedPrs.find(pr => pr.merged) ?? linkedPrs.find(pr => pr.state === "open") ??
+      linkedPrs[0];
+}
+
+// Extract PRs referencing the issue from GitHub's issue timeline (cross-referenced events).
+export function extractLinkedPrs(timeline: unknown): BugReportLinkedPr[] {
+  if (!Array.isArray(timeline)) return [];
+  const prs = new Map<number, BugReportLinkedPr>();
+  for (const event of timeline) {
+    const e = event as {
+      event?: unknown;
+      source?: { issue?: {
+        number?: unknown; state?: unknown; html_url?: unknown;
+        pull_request?: { merged_at?: unknown } | undefined;
+      } };
+    };
+    if (e.event !== "cross-referenced") continue;
+    const issue = e.source?.issue;
+    if (!issue || issue.pull_request === undefined) continue;
+    if (typeof issue.number !== "number" || typeof issue.html_url !== "string") continue;
+    prs.set(issue.number, {
+      number: issue.number,
+      url: issue.html_url,
+      state: issue.state === "closed" ? "closed" : "open",
+      merged: typeof issue.pull_request?.merged_at === "string",
+    });
+  }
+  return [...prs.values()];
+}
+
+// Resolve the current status of one stored report from GitHub. Failures degrade to the
+// last-known stored state rather than throwing (the panel should never break on API hiccups).
+async function fetchOneBugReportStatus(
+  token: string, record: StoredBugReport, fetchImpl: typeof fetch,
+): Promise<{ status: BugReportStatus; pr?: BugReportLinkedPr }> {
+  const headers = {
+    "Authorization": `Bearer ${token}`,
+    "Accept": "application/vnd.github+json",
+    "User-Agent": "cloudflare-os-bug-report",
+  };
+  const base = `https://api.github.com/repos/${BUG_REPORT_REPO}/issues/${record.issueNumber}`;
+  try {
+    const [issueResponse, timelineResponse] = await Promise.all([
+      fetchImpl(base, { headers }),
+      fetchImpl(`${base}/timeline?per_page=100`, { headers }),
+    ]);
+    if (!issueResponse.ok) return { status: record.status, pr: record.pr };
+    const issue = await issueResponse.json() as { state?: unknown };
+    const timeline = timelineResponse.ok ? await timelineResponse.json() : [];
+    const linkedPrs = extractLinkedPrs(timeline);
+    return {
+      status: deriveBugReportStatus(issue.state === "closed" ? "closed" : "open", linkedPrs),
+      pr: pickRelevantPr(linkedPrs),
+    };
+  } catch {
+    return { status: record.status, pr: record.pr };
+  }
+}
+
+// Refresh all stored records against GitHub. Without a token the records are returned
+// unchanged (status stays as stored, typically "unknown").
+export async function refreshBugReportStatuses(
+  env: BugReportEnv,
+  records: StoredBugReport[],
+  now: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<StoredBugReport[]> {
+  const token = env.GITHUB_BUG_REPORT_TOKEN;
+  if (!token || records.length === 0) return records;
+  return Promise.all(records.map(async record => {
+    const { status, pr } = await fetchOneBugReportStatus(token, record, fetchImpl);
+    return {
+      ...record,
+      status,
+      pr,
+      statusChangedAt: status === record.status ? record.statusChangedAt : now,
+    };
+  }));
 }
