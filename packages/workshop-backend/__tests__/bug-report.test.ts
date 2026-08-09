@@ -319,3 +319,29 @@ describe("refreshBugReportStatuses", () => {
     expect(record.statusChangedAt).toBe(1_000);
   });
 });
+
+describe("submitBugReportFlow slot rollback", () => {
+  it("releases the claimed slot when GitHub rejects the request", async () => {
+    const claimSlot = vi.fn<() => Promise<boolean>>().mockResolvedValue(true);
+    const releaseSlot = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValue(new Response("oops", { status: 502 }));
+    await expect(submitBugReportFlow(
+      { GITHUB_BUG_REPORT_TOKEN: "t" }, reporter, makeReport(), claimSlot, fetchMock, releaseSlot,
+    )).rejects.toThrow(/status 502/);
+    expect(claimSlot).toHaveBeenCalledTimes(1);
+    expect(releaseSlot).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the slot on success", async () => {
+    const claimSlot = vi.fn<() => Promise<boolean>>().mockResolvedValue(true);
+    const releaseSlot = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(
+      JSON.stringify({ html_url: "https://github.com/yutaro0915/cloudflare-os/issues/44", number: 44 }),
+      { status: 201 },
+    ));
+    await submitBugReportFlow(
+      { GITHUB_BUG_REPORT_TOKEN: "t" }, reporter, makeReport(), claimSlot, fetchMock, releaseSlot);
+    expect(releaseSlot).not.toHaveBeenCalled();
+  });
+});

@@ -638,7 +638,9 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     // only the display name is passed on — the account id (often an email) must not reach the
     // public issue.
     let result = await submitBugReportFlow(this.env, { name: profile.name }, report,
-        () => this.user.claimBugReportSlot(3, 10 * 60 * 1000));
+        () => this.user.claimBugReportSlot(3, 10 * 60 * 1000),
+        fetch,
+        () => this.user.releaseBugReportSlot());
     await this.user.recordBugReport(result.issueNumber, result.title);
     return result;
   }
