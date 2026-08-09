@@ -21,6 +21,7 @@ import {
   VendorDescription,
 } from '@gadgets/workshop-shared/gatekeeper'
 import { ConnectedAccountsSubscriber, GatekeeperVendorInfo } from '@gadgets/workshop-shared/api'
+import { mergeAvailableVendors } from '../availableVendors'
 import { useDocumentTitle } from '../useDocumentTitle'
 import { useSiteName } from '../ServerConfigContext'
 import { useToasts } from '../useToasts'
@@ -688,12 +689,9 @@ function ConnectorsPage() {
 
   // Connectable vendors = OAuth/resource gatekeepers plus opt-in ambient ones, rendered identically.
   // An ambient vendor is recognized by `description.autoProvisionsAccount`, which routes the connect
-  // action to a direct (no-OAuth) add instead.
+  // action to a direct (no-OAuth) add instead. The two lists can overlap, so they are deduped by id.
   const availableVendors = useMemo<VendorEntry[]>(
-    () => [
-      ...vendors,
-      ...addable,
-    ],
+    () => mergeAvailableVendors<VendorEntry>(vendors, addable),
     [vendors, addable],
   )
 
