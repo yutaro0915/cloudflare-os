@@ -3,9 +3,9 @@ name: preview-teardown
 # Removes a PR's preview fleet when the PR closes (norms: .github/agents/rubrics/flow.md
 # — a closed PR must leave no workers behind). A daily sweep also deletes any -pr-N
 # fleet whose PR is no longer open (covers cancelled runs, manual deploys, renames).
-# KV/R2 resources auto-provisioned by wrangler are deleted together with the worker
-# where the API supports it; anything left over shows up in the sweep log for manual
-# cleanup.
+# KV namespaces and R2 buckets auto-provisioned by wrangler are NOT deleted with the
+# worker, so delete_fleet removes them explicitly (issue #25). Leftovers still show up
+# in the sweep log for manual cleanup.
 
 on:
   pull_request:
@@ -47,6 +47,43 @@ jobs:
                 "$api/workers/scripts/$name?force=true")
               echo "delete $name -> HTTP $code"
             done
+
+            # Auto-provisioned KV namespaces (title: cloudflare-os-<worker>-pr-<n>-<binding>).
+            curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "$api/storage/kv/namespaces?per_page=100" \
+              | jq -r --arg re "^cloudflare-os-.*-pr-$n-" \
+                  '.result[] | select(.title | test($re)) | "\(.id) \(.title)"' \
+              | while read -r id title; do
+                  code=$(curl -s -o /tmp/del.json -w '%{http_code}' -X DELETE \
+                    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                    "$api/storage/kv/namespaces/$id")
+                  echo "delete kv $title -> HTTP $code"
+                done
+
+            # Auto-provisioned R2 buckets (name: cloudflare-os-<worker>-pr-<n>-<binding>).
+            # Buckets must be emptied before deletion.
+            curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "$api/r2/buckets?per_page=100" \
+              | jq -r --arg re "^cloudflare-os-.*-pr-$n-" \
+                  '.result.buckets[]? | select(.name | test($re)) | .name' \
+              | while read -r bucket; do
+                  for _ in $(seq 1 10); do
+                    KEYS=$(curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                      "$api/r2/buckets/$bucket/objects?per_page=1000" \
+                      | jq -r '.result[]?.key')
+                    [ -z "$KEYS" ] && break
+                    printf '%s\n' "$KEYS" | while read -r key; do
+                      enc=$(jq -rn --arg k "$key" '$k|@uri')
+                      curl -s -o /dev/null -X DELETE \
+                        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                        "$api/r2/buckets/$bucket/objects/$enc"
+                    done
+                  done
+                  code=$(curl -s -o /tmp/del.json -w '%{http_code}' -X DELETE \
+                    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                    "$api/r2/buckets/$bucket")
+                  echo "delete r2 $bucket -> HTTP $code"
+                done
           }
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
