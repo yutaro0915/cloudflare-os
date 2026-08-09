@@ -1,7 +1,10 @@
+import { useState } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
-import { Desktop, Moon, Plug, Sun } from '@phosphor-icons/react'
+import { Bug, Desktop, Moon, Plug, Sun } from '@phosphor-icons/react'
 import { Tooltip } from '@cloudflare/kumo'
 import UserMenu from '../UserMenu'
+import BugReportModal from '../../BugReportModal'
+import { useAuthenticatedApi } from '../../AuthContext'
 import { useTheme } from '../../ThemeContext'
 import type { ThemeMode } from '../../theme'
 
@@ -73,6 +76,34 @@ function StripLink({
   )
 }
 
+function BugReportButton() {
+  const { authenticatedApi } = useAuthenticatedApi()
+  const [modalOpen, setModalOpen] = useState(false)
+
+  return (
+    <>
+      <Tooltip
+        content="Report a bug"
+        render={(
+          <button
+            type="button"
+            aria-label="Report a bug"
+            onClick={() => setModalOpen(true)}
+            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-kumo-inactive transition-colors hover:bg-kumo-tint hover:text-kumo-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kumo-ring focus-visible:ring-offset-2 focus-visible:ring-offset-kumo-elevated"
+          >
+            <Bug size={15} />
+          </button>
+        )}
+      />
+      <BugReportModal
+        visible={modalOpen}
+        onClose={() => setModalOpen(false)}
+        authenticatedApi={authenticatedApi}
+      />
+    </>
+  )
+}
+
 export default function SidebarUtilityStrip({ collapsed = false }: { collapsed?: boolean }) {
   return (
     <div
@@ -86,6 +117,7 @@ export default function SidebarUtilityStrip({ collapsed = false }: { collapsed?:
       <StripLink to="/gatekeepers" label="Gatekeepers">
         <Plug size={15} />
       </StripLink>
+      <BugReportButton />
       <div className={collapsed ? 'flex flex-col items-center gap-2' : 'ml-auto flex items-center gap-1'}>
         <ThemeModeButton />
         <UserMenu />

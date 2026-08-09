@@ -591,9 +591,37 @@ export interface AuthenticatedApi extends RpcTarget {
   // managed here; it stays env-var driven.)
   getAdminApi(): Promise<RpcStub<AdminApi> | null>;
 
+  // File a bug report as a GitHub issue on the deployment's source repository. Returns the URL
+  // of the created issue. Throws if the deployment has no GITHUB_BUG_REPORT_TOKEN configured.
+  submitBugReport(report: BugReportInput): Promise<BugReportResult>;
+
   // TODO:
   // - Edit permissions on a connected account.
 }
+
+// A user-submitted bug report, collected by the in-app bug report modal.
+export type BugReportInput = {
+  // Free-form description of the problem. Required.
+  description: string;
+
+  // The page the user was on when reporting.
+  url: string;
+  route: string;
+
+  // Browser context, collected automatically.
+  userAgent: string;
+  viewport: { width: number; height: number };
+
+  // Optionally, a DOM element the user picked on the page. `elementHtml` is a truncated
+  // outerHTML excerpt; `elementSelector` is a best-effort CSS selector path to it.
+  elementHtml?: string;
+  elementSelector?: string;
+};
+
+export type BugReportResult = {
+  // URL of the GitHub issue that was created.
+  issueUrl: string;
+};
 
 // Describes a gatekeeper's management app, for the Workshop nav + page.
 export type GatekeeperAppInfo = {
