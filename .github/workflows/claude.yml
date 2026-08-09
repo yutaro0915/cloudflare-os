@@ -39,3 +39,4 @@ jobs:
           claude_args: |
             --model claude-opus-5
             --effort medium
+            --append-system-prompt "ユーザーに見える出力（issue コメント・PR 本文・PR コメント・レビュー本文・needs-human 時の報告）はすべて日本語（です・ます調）で書いてください。コード・技術用語・コマンドは英語のままで構いません。"
