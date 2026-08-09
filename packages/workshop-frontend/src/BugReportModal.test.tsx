@@ -48,11 +48,26 @@ vi.mock('@cloudflare/kumo', () => {
       <button {...props}>{children}</button>,
     Input: (props: object) => <input {...props} />,
     InputArea: (props: object) => <textarea {...props} />,
+    Loader: () => <div>loading...</div>,
+    Badge: ({ children, variant }: { children: ReactNode; variant?: string }) =>
+      <span data-badge-variant={variant}>{children}</span>,
+    Tabs: ({ tabs, onValueChange }: {
+      tabs: { value: string; label: string }[]
+      onValueChange: (value: string) => void
+    }) => (
+      <div role="tablist">
+        {tabs.map(tab => (
+          <button key={tab.value} role="tab" onClick={() => onValueChange(tab.value)}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+    ),
     useKumoToastManager: () => ({ add: toastAdd, toasts: [] }),
   }
 })
 
-import BugReportModal, { cssSelectorPath } from './BugReportModal'
+import BugReportModal, { cssSelectorPath, useBugReportUnread } from './BugReportModal'
 
 let container: HTMLDivElement
 let root: Root
@@ -71,9 +86,16 @@ afterEach(() => {
 
 function makeApi(overrides: Partial<AuthenticatedApi> = {}): RpcStub<AuthenticatedApi> {
   return {
-    submitBugReport: vi.fn<() => Promise<{ issueUrl: string }>>().mockResolvedValue({
-      issueUrl: 'https://github.com/yutaro0915/cloudflare-os/issues/7',
-    }),
+    submitBugReport: vi.fn<() => Promise<{ issueUrl: string; issueNumber: number; title: string }>>()
+      .mockResolvedValue({
+        issueUrl: 'https://github.com/yutaro0915/cloudflare-os/issues/7',
+        issueNumber: 7,
+        title: '[Bug Report] Something broke',
+      }),
+    listMyBugReports: vi.fn<() => Promise<{ reports: unknown[]; unreadCount: number }>>()
+      .mockResolvedValue({ reports: [], unreadCount: 0 }),
+    markBugReportsSeen: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    getBugReportUnreadCount: vi.fn<() => Promise<number>>().mockResolvedValue(0),
     ...overrides,
   } as unknown as RpcStub<AuthenticatedApi>
 }
@@ -172,5 +194,65 @@ describe('cssSelectorPath', () => {
     const second = host.querySelectorAll('button')[1]
     expect(cssSelectorPath(second)).toBe('#app > section > button:nth-of-type(2)')
     host.remove()
+  })
+})
+
+describe('My reports tab', () => {
+  it('lists reports with status chips and issue/PR links, and marks them seen', async () => {
+    const listMyBugReports = vi.fn<() => Promise<unknown>>().mockResolvedValue({
+      reports: [
+        {
+          issueNumber: 30, issueUrl: 'https://github.com/yutaro0915/cloudflare-os/issues/30',
+          title: '[Bug Report] Sidebar glitch', createdAt: 1000, status: 'merged',
+          pr: { number: 31, url: 'https://github.com/yutaro0915/cloudflare-os/pull/31', state: 'closed', merged: true },
+        },
+        {
+          issueNumber: 32, issueUrl: 'https://github.com/yutaro0915/cloudflare-os/issues/32',
+          title: '[Bug Report] Broken toast', createdAt: 2000, status: 'reported',
+        },
+      ],
+      unreadCount: 1,
+    })
+    const onReportsSeen = vi.fn<() => void>()
+    const api = makeApi({ listMyBugReports } as Partial<AuthenticatedApi>)
+    render(<BugReportModal visible onClose={() => {}} authenticatedApi={api} onReportsSeen={onReportsSeen} />)
+
+    const myReportsTab = Array.from(container.querySelectorAll('[role="tab"]'))
+      .find(tab => tab.textContent === 'My reports') as HTMLButtonElement
+    await act(async () => { myReportsTab.click() })
+
+    const list = container.querySelector('[aria-label="My bug reports"]')!
+    expect(list.textContent).toContain('[Bug Report] Sidebar glitch')
+    expect(list.textContent).toContain('Fixed')
+    expect(list.textContent).toContain('Reported')
+    const links = Array.from(list.querySelectorAll('a')).map(a => a.getAttribute('href'))
+    expect(links).toContain('https://github.com/yutaro0915/cloudflare-os/issues/30')
+    expect(links).toContain('https://github.com/yutaro0915/cloudflare-os/pull/31')
+    expect(api.markBugReportsSeen).toHaveBeenCalled()
+    expect(onReportsSeen).toHaveBeenCalled()
+  })
+
+  it('shows an empty state when there are no reports', async () => {
+    const api = makeApi()
+    render(<BugReportModal visible onClose={() => {}} authenticatedApi={api} />)
+    const myReportsTab = Array.from(container.querySelectorAll('[role="tab"]'))
+      .find(tab => tab.textContent === 'My reports') as HTMLButtonElement
+    await act(async () => { myReportsTab.click() })
+    expect(container.textContent).toContain('No bug reports yet.')
+  })
+})
+
+describe('useBugReportUnread', () => {
+  function Probe({ api }: { api: RpcStub<AuthenticatedApi> }) {
+    const { unreadCount } = useBugReportUnread(api)
+    return <output data-testid="unread">{unreadCount}</output>
+  }
+
+  it('exposes the unread count from the API for the sidebar badge', async () => {
+    const api = makeApi({
+      getBugReportUnreadCount: vi.fn<() => Promise<number>>().mockResolvedValue(2),
+    } as Partial<AuthenticatedApi>)
+    await act(async () => { root.render(<Probe api={api} />) })
+    expect(container.querySelector('[data-testid="unread"]')!.textContent).toBe('2')
   })
 })

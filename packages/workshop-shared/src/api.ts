@@ -595,6 +595,19 @@ export interface AuthenticatedApi extends RpcTarget {
   // of the created issue. Throws if the deployment has no GITHUB_BUG_REPORT_TOKEN configured.
   submitBugReport(report: BugReportInput): Promise<BugReportResult>;
 
+  // List the user's own bug reports with their current progress (issue / linked PR state).
+  // Queries GitHub only when the cached state is older than ~60 s; without a configured
+  // GITHUB_BUG_REPORT_TOKEN the stored records are returned with status "unknown".
+  listMyBugReports(): Promise<MyBugReportsResult>;
+
+  // How many of the user's bug reports changed status since markBugReportsSeen() was last
+  // called. Served purely from stored state (no GitHub traffic) so it is cheap enough for a
+  // sidebar badge.
+  getBugReportUnreadCount(): Promise<number>;
+
+  // Mark the user's bug report list as seen, resetting the unread badge.
+  markBugReportsSeen(): Promise<void>;
+
   // TODO:
   // - Edit permissions on a connected account.
 }
@@ -621,6 +634,40 @@ export type BugReportInput = {
 export type BugReportResult = {
   // URL of the GitHub issue that was created.
   issueUrl: string;
+
+  // Issue number and title, recorded so the user can follow the report's progress later.
+  issueNumber: number;
+  title: string;
+};
+
+// Lifecycle of a bug report as seen from the reporter's side:
+//   reported -> pr_open -> merged, or reported -> closed (issue closed without a merged PR),
+//   with "unknown" when GitHub state could not be fetched (e.g. no token configured).
+export type BugReportStatus = "reported" | "pr_open" | "merged" | "closed" | "unknown";
+
+// A pull request linked to a bug report issue (via GitHub's cross-reference timeline).
+export type BugReportLinkedPr = {
+  number: number;
+  url: string;
+  state: "open" | "closed";
+  merged: boolean;
+};
+
+// One of the user's own bug reports, with its last-known progress.
+export type MyBugReport = {
+  issueNumber: number;
+  issueUrl: string;
+  title: string;
+  createdAt: number;  // ms since epoch
+  status: BugReportStatus;
+  pr?: BugReportLinkedPr;
+};
+
+export type MyBugReportsResult = {
+  // Newest first.
+  reports: MyBugReport[];
+  // Reports whose status changed since markBugReportsSeen() was last called.
+  unreadCount: number;
 };
 
 // Describes a gatekeeper's management app, for the Workshop nav + page.

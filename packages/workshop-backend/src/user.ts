@@ -2,7 +2,7 @@ import { RpcStub } from "capnweb";
 import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, SUGGESTED_MODELS, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, BlueprintOutput, OutputSummary, WorkpieceId, ListOutputsResult, type AgentDefinition, type SkillDefinition } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, GatekeeperUser, GatekeeperUserVerifier, GatekeeperVendor, AccountDescription, VendorDescription, GatekeeperConnectCallback, SupportedResource, ResourceConfiguratorFrame, AppUiContext, GatekeeperUiFrame } from "@gadgets/workshop-shared/gatekeeper";
 import { shouldAutoProvisionAccount, ambientGatekeeperMode } from "./provisioning-policy.js";
-import { updateBugReportWindow } from "./bug-report.js";
+import { appendBugReportRecord, updateBugReportWindow, type StoredBugReport } from "./bug-report.js";
 import { CloudflareGatekeeperUser } from "@gadgets/workshop-shared/cloudflare-gatekeeper";
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { createTypedStorage, collection } from "@gadgets/typed-storage";
@@ -236,6 +236,14 @@ function makeUserStorage(storage: DurableObjectStorage) {
       // Timestamps (ms) of this user's recent bug report submissions, for the sliding-window
       // rate limit in claimBugReportSlot(). Pruned to the window on every claim.
       bugReportTimestamps: <number[]>[],
+
+      // The user's own bug reports (newest first, bounded), with last-known GitHub progress.
+      bugReports: <StoredBugReport[]>[],
+      // When GitHub state was last fetched, bounding refresh frequency (~once a minute).
+      bugReportsFetchedAt: 0,
+      // When the user last opened the "My reports" panel; the unread badge counts reports
+      // whose status changed after this.
+      bugReportsSeenAt: 0,
 
       // `passwordHash` value as passed to `login()`, but with an extra round of SHA-256 applied.
       //
@@ -816,6 +824,43 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       this.storage.bugReportTimestamps.get(), Date.now(), limit, windowMs);
     this.storage.bugReportTimestamps.put(timestamps);
     return allowed;
+  }
+
+  // Remember a successfully filed bug report so the user can follow its progress later.
+  async recordBugReport(issueNumber: number, title: string): Promise<void> {
+    let now = Date.now();
+    this.storage.bugReports.put(appendBugReportRecord(this.storage.bugReports.get(), {
+      issueNumber, title, createdAt: now, status: "reported", statusChangedAt: now,
+    }));
+  }
+
+  // Stored bug report records plus the timestamps the panel logic needs.
+  async getBugReportSyncState():
+      Promise<{ records: StoredBugReport[]; fetchedAt: number; seenAt: number }> {
+    return {
+      records: this.storage.bugReports.get(),
+      fetchedAt: this.storage.bugReportsFetchedAt.get(),
+      seenAt: this.storage.bugReportsSeenAt.get(),
+    };
+  }
+
+  // Store refreshed records (from a GitHub fetch) and stamp the cache time.
+  async putBugReportRecords(records: StoredBugReport[]): Promise<void> {
+    this.storage.bugReports.put(records);
+    this.storage.bugReportsFetchedAt.put(Date.now());
+  }
+
+  // Reports whose status changed since the panel was last opened. Served from stored state
+  // only — cheap enough to call for a sidebar badge.
+  async getBugReportUnreadCount(): Promise<number> {
+    let seenAt = this.storage.bugReportsSeenAt.get();
+    return this.storage.bugReports.get()
+        .filter(record => record.status !== "reported" && record.statusChangedAt > seenAt)
+        .length;
+  }
+
+  async markBugReportsSeen(): Promise<void> {
+    this.storage.bugReportsSeenAt.put(Date.now());
   }
 
   // DO NOT MAKE PUBLIC -- returns API keys.

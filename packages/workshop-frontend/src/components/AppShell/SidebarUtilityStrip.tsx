@@ -3,7 +3,7 @@ import { Link, useRouterState } from '@tanstack/react-router'
 import { Bug, Desktop, Moon, Plug, Sun } from '@phosphor-icons/react'
 import { Tooltip } from '@cloudflare/kumo'
 import UserMenu from '../UserMenu'
-import BugReportModal from '../../BugReportModal'
+import BugReportModal, { useBugReportUnread } from '../../BugReportModal'
 import { useAuthenticatedApi } from '../../AuthContext'
 import { useTheme } from '../../ThemeContext'
 import type { ThemeMode } from '../../theme'
@@ -79,19 +79,28 @@ function StripLink({
 function BugReportButton() {
   const { authenticatedApi } = useAuthenticatedApi()
   const [modalOpen, setModalOpen] = useState(false)
+  const { unreadCount, clear } = useBugReportUnread(authenticatedApi)
 
   return (
     <>
       <Tooltip
-        content="Report a bug"
+        content={unreadCount > 0 ? `Report a bug (${unreadCount} updated)` : 'Report a bug'}
         render={(
           <button
             type="button"
-            aria-label="Report a bug"
+            aria-label={unreadCount > 0 ? `Report a bug (${unreadCount} reports updated)` : 'Report a bug'}
             onClick={() => setModalOpen(true)}
-            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-kumo-inactive transition-colors hover:bg-kumo-tint hover:text-kumo-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kumo-ring focus-visible:ring-offset-2 focus-visible:ring-offset-kumo-elevated"
+            className="relative flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-kumo-inactive transition-colors hover:bg-kumo-tint hover:text-kumo-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kumo-ring focus-visible:ring-offset-2 focus-visible:ring-offset-kumo-elevated"
           >
             <Bug size={15} />
+            {unreadCount > 0 && (
+              <span
+                data-testid="bug-report-unread-badge"
+                className="absolute right-0.5 top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-kumo-brand px-0.5 text-[9px] font-semibold leading-none text-kumo-inverse"
+              >
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
           </button>
         )}
       />
@@ -99,6 +108,7 @@ function BugReportButton() {
         visible={modalOpen}
         onClose={() => setModalOpen(false)}
         authenticatedApi={authenticatedApi}
+        onReportsSeen={clear}
       />
     </>
   )

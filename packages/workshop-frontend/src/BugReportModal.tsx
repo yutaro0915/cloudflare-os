@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Checkbox, Dialog, Text } from '@cloudflare/kumo'
+import { Badge, Checkbox, Dialog, Loader, Tabs, Text } from '@cloudflare/kumo'
 import { CursorClick } from '@phosphor-icons/react'
 import { RpcStub } from 'capnweb'
-import { AuthenticatedApi } from '@gadgets/workshop-shared/api'
+import { AuthenticatedApi, MyBugReport, BugReportStatus } from '@gadgets/workshop-shared/api'
 import { WorkshopButton, WorkshopInputArea } from './components/WorkshopControls'
 import { useToasts } from './useToasts'
 
@@ -12,6 +12,106 @@ interface BugReportModalProps {
   visible: boolean
   onClose: () => void
   authenticatedApi: RpcStub<AuthenticatedApi>
+  /** Called after the "My reports" tab marks reports as seen (so a badge can clear). */
+  onReportsSeen?: () => void
+}
+
+// Sidebar-badge state: how many of the user's reports changed status since they last opened
+// the "My reports" tab. Served from the user DO's stored state (no GitHub traffic).
+export function useBugReportUnread(authenticatedApi: RpcStub<AuthenticatedApi>) {
+  const [unreadCount, setUnreadCount] = useState(0)
+  const refresh = useCallback(() => {
+    authenticatedApi.getBugReportUnreadCount().then(setUnreadCount).catch(() => {})
+  }, [authenticatedApi])
+  useEffect(() => { refresh() }, [refresh])
+  return { unreadCount, refresh, clear: () => setUnreadCount(0) }
+}
+
+const STATUS_BADGE: Record<BugReportStatus, { label: string; variant: 'neutral' | 'success' | 'warning' | 'error' }> = {
+  reported: { label: 'Reported', variant: 'neutral' },
+  pr_open: { label: 'PR open', variant: 'warning' },
+  merged: { label: 'Fixed', variant: 'success' },
+  closed: { label: 'Declined', variant: 'error' },
+  unknown: { label: 'Unknown', variant: 'neutral' },
+}
+
+// "My reports" tab: the user's own reports with their current progress. Fetches when shown;
+// the backend caches GitHub state (~60 s) so re-opens are cheap.
+function MyReportsPanel({ authenticatedApi, onSeen }: {
+  authenticatedApi: RpcStub<AuthenticatedApi>
+  onSeen?: () => void
+}) {
+  const [reports, setReports] = useState<MyBugReport[] | null>(null)
+  const [loadError, setLoadError] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    authenticatedApi.listMyBugReports()
+      .then(result => {
+        if (cancelled) return
+        setReports(result.reports)
+        // Opening the list counts as seeing it: reset the unread badge.
+        authenticatedApi.markBugReportsSeen().then(() => onSeen?.()).catch(() => {})
+      })
+      .catch(() => { if (!cancelled) setLoadError(true) })
+    return () => { cancelled = true }
+    // Fetch once per mount (the tab remounts when reselected or the modal reopens).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authenticatedApi])
+
+  if (loadError) {
+    return (
+      <div role="alert" className="py-6 text-center text-[13px] text-kumo-danger">
+        Failed to load your reports. Please try again later.
+      </div>
+    )
+  }
+  if (reports === null) {
+    return <div className="py-8 text-center"><Loader /></div>
+  }
+  if (reports.length === 0) {
+    return (
+      <div className="py-8 text-center">
+        <Text variant="secondary" size="sm">No bug reports yet.</Text>
+      </div>
+    )
+  }
+  return (
+    <ul className="flex flex-col gap-2" aria-label="My bug reports">
+      {reports.map(report => {
+        const badge = STATUS_BADGE[report.status] ?? STATUS_BADGE.unknown
+        return (
+          <li
+            key={report.issueNumber}
+            className="flex items-center gap-3 rounded-lg border border-kumo-line bg-kumo-base px-3 py-2"
+          >
+            <Badge variant={badge.variant}>{badge.label}</Badge>
+            <span className="min-w-0 flex-1 truncate text-[13px] text-kumo-default" title={report.title}>
+              {report.title}
+            </span>
+            <a
+              href={report.issueUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 text-[12px] text-kumo-brand hover:underline"
+            >
+              #{report.issueNumber}
+            </a>
+            {report.pr && (
+              <a
+                href={report.pr.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 text-[12px] text-kumo-brand hover:underline"
+              >
+                PR #{report.pr.number}
+              </a>
+            )}
+          </li>
+        )
+      })}
+    </ul>
+  )
 }
 
 interface PickedElement {
@@ -103,8 +203,9 @@ function ElementPicker({ onPick, onCancel }: {
   return null
 }
 
-export default function BugReportModal({ visible, onClose, authenticatedApi }: BugReportModalProps) {
+export default function BugReportModal({ visible, onClose, authenticatedApi, onReportsSeen }: BugReportModalProps) {
   const toasts = useToasts()
+  const [activeTab, setActiveTab] = useState('report')
   const [confirmed, setConfirmed] = useState(false)
   const [description, setDescription] = useState('')
   const [picked, setPicked] = useState<PickedElement | null>(null)
@@ -121,6 +222,7 @@ export default function BugReportModal({ visible, onClose, authenticatedApi }: B
       setPicking(false)
       setSubmitting(false)
       setErrorMessage(null)
+      setActiveTab('report')
     }
   }, [visible])
 
@@ -173,6 +275,25 @@ export default function BugReportModal({ visible, onClose, authenticatedApi }: B
             repository.
           </Text>
 
+          <div className="mt-3">
+            <Tabs
+              variant="underline"
+              value={activeTab}
+              onValueChange={setActiveTab}
+              tabs={[
+                { value: 'report', label: 'Report a bug' },
+                { value: 'reports', label: 'My reports' },
+              ]}
+            />
+          </div>
+
+          {activeTab === 'reports' && (
+            <div className="mt-4">
+              <MyReportsPanel authenticatedApi={authenticatedApi} onSeen={onReportsSeen} />
+            </div>
+          )}
+
+          {activeTab === 'report' && (
           <div className="mt-4 flex flex-col gap-4">
             <WorkshopInputArea
               aria-label="Bug description"
@@ -229,6 +350,7 @@ export default function BugReportModal({ visible, onClose, authenticatedApi }: B
               </WorkshopButton>
             </div>
           </div>
+          )}
         </Dialog>
       </Dialog.Root>
     </>

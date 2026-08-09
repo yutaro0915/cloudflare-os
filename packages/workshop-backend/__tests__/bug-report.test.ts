@@ -3,10 +3,17 @@ import type { BugReportInput } from "@gadgets/workshop-shared/api";
 import {
   BUG_REPORT_LABEL,
   BUG_REPORT_REPO,
+  appendBugReportRecord,
   createBugReportIssue,
+  deriveBugReportStatus,
+  extractLinkedPrs,
   formatBugReportIssueBody,
+  MAX_STORED_BUG_REPORTS,
+  pickRelevantPr,
+  refreshBugReportStatuses,
   submitBugReportFlow,
   updateBugReportWindow,
+  type StoredBugReport,
 } from "../src/bug-report.js";
 
 const reporter = { name: "Test User" };
@@ -25,7 +32,7 @@ function makeReport(overrides: Partial<BugReportInput> = {}): BugReportInput {
 describe("createBugReportIssue", () => {
   it("creates a labeled GitHub issue and returns its URL", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(
-      JSON.stringify({ html_url: "https://github.com/yutaro0915/cloudflare-os/issues/42" }),
+      JSON.stringify({ html_url: "https://github.com/yutaro0915/cloudflare-os/issues/42", number: 42 }),
       { status: 201 },
     ));
 
@@ -33,7 +40,9 @@ describe("createBugReportIssue", () => {
       { GITHUB_BUG_REPORT_TOKEN: "test-token" }, reporter, makeReport(), fetchMock,
     );
 
-    expect(result).toEqual({ issueUrl: "https://github.com/yutaro0915/cloudflare-os/issues/42" });
+    expect(result.issueUrl).toBe("https://github.com/yutaro0915/cloudflare-os/issues/42");
+    expect(result.issueNumber).toBe(42);
+    expect(result.title).toContain("[Bug Report]");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(`https://api.github.com/repos/${BUG_REPORT_REPO}/issues`);
@@ -175,7 +184,7 @@ describe("submitBugReportFlow", () => {
   it("creates the issue when validation and rate limit pass", async () => {
     const claimSlot = vi.fn<() => Promise<boolean>>().mockResolvedValue(true);
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(
-      JSON.stringify({ html_url: "https://github.com/yutaro0915/cloudflare-os/issues/43" }),
+      JSON.stringify({ html_url: "https://github.com/yutaro0915/cloudflare-os/issues/43", number: 43 }),
       { status: 201 },
     ));
     const result = await submitBugReportFlow(
@@ -202,5 +211,111 @@ describe("updateBugReportWindow", () => {
     const result = updateBugReportWindow(state, 600_003, 3, 600_000);
     expect(result.allowed).toBe(true);
     expect(result.timestamps).toEqual([600_003]);
+  });
+});
+
+function makeRecord(overrides: Partial<StoredBugReport> = {}): StoredBugReport {
+  return {
+    issueNumber: 42, title: "[Bug Report] x", createdAt: 1_000,
+    status: "reported", statusChangedAt: 1_000, ...overrides,
+  };
+}
+
+const openPr = { number: 7, url: "https://github.com/x/pull/7", state: "open" as const, merged: false };
+const mergedPr = { number: 8, url: "https://github.com/x/pull/8", state: "closed" as const, merged: true };
+
+describe("deriveBugReportStatus", () => {
+  it("follows reported -> pr_open -> merged, with closed as the declined path", () => {
+    expect(deriveBugReportStatus("open", [])).toBe("reported");
+    expect(deriveBugReportStatus("open", [openPr])).toBe("pr_open");
+    expect(deriveBugReportStatus("open", [mergedPr])).toBe("merged");
+    expect(deriveBugReportStatus("closed", [mergedPr, openPr])).toBe("merged");
+    expect(deriveBugReportStatus("closed", [])).toBe("closed");
+    expect(deriveBugReportStatus("closed", [{ ...openPr, state: "closed" }])).toBe("closed");
+  });
+});
+
+describe("pickRelevantPr", () => {
+  it("prefers merged, then open, then any", () => {
+    expect(pickRelevantPr([openPr, mergedPr])).toBe(mergedPr);
+    expect(pickRelevantPr([{ ...openPr, state: "closed" }, openPr])?.state).toBe("open");
+    expect(pickRelevantPr([])).toBeUndefined();
+  });
+});
+
+describe("extractLinkedPrs", () => {
+  it("collects cross-referenced pull requests, ignoring plain issues and junk", () => {
+    const timeline = [
+      { event: "labeled" },
+      { event: "cross-referenced", source: { issue: { number: 9, html_url: "https://github.com/x/issues/9", state: "open" } } },
+      { event: "cross-referenced", source: { issue: {
+        number: 7, html_url: "https://github.com/x/pull/7", state: "open", pull_request: {},
+      } } },
+      { event: "cross-referenced", source: { issue: {
+        number: 8, html_url: "https://github.com/x/pull/8", state: "closed",
+        pull_request: { merged_at: "2026-08-09T00:00:00Z" },
+      } } },
+      "garbage",
+    ];
+    expect(extractLinkedPrs(timeline)).toEqual([
+      { number: 7, url: "https://github.com/x/pull/7", state: "open", merged: false },
+      { number: 8, url: "https://github.com/x/pull/8", state: "closed", merged: true },
+    ]);
+    expect(extractLinkedPrs(null)).toEqual([]);
+  });
+});
+
+describe("appendBugReportRecord", () => {
+  it("prepends newest-first and caps the list", () => {
+    let records: StoredBugReport[] = [];
+    for (let i = 1; i <= MAX_STORED_BUG_REPORTS + 5; i++) {
+      records = appendBugReportRecord(records, makeRecord({ issueNumber: i }));
+    }
+    expect(records).toHaveLength(MAX_STORED_BUG_REPORTS);
+    expect(records[0].issueNumber).toBe(MAX_STORED_BUG_REPORTS + 5);
+  });
+});
+
+describe("refreshBugReportStatuses", () => {
+  it("returns records unchanged without a token (no GitHub traffic)", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    const records = [makeRecord({ status: "unknown" })];
+    expect(await refreshBugReportStatuses({}, records, 5_000, fetchMock)).toEqual(records);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("updates status and stamps statusChangedAt only on change", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/timeline?per_page=100")) {
+        return new Response(JSON.stringify([
+          { event: "cross-referenced", source: { issue: {
+            number: 7, html_url: "https://github.com/x/pull/7", state: "open", pull_request: {},
+          } } },
+        ]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ state: "open" }), { status: 200 });
+    });
+
+    const [changed] = await refreshBugReportStatuses(
+      { GITHUB_BUG_REPORT_TOKEN: "t" }, [makeRecord()], 9_999, fetchMock);
+    expect(changed.status).toBe("pr_open");
+    expect(changed.statusChangedAt).toBe(9_999);
+    expect(changed.pr?.number).toBe(7);
+
+    const [unchanged] = await refreshBugReportStatuses(
+      { GITHUB_BUG_REPORT_TOKEN: "t" }, [changed], 20_000, fetchMock);
+    expect(unchanged.status).toBe("pr_open");
+    expect(unchanged.statusChangedAt).toBe(9_999);
+  });
+
+  it("keeps the last-known status when GitHub errors", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("nope", { status: 500 }));
+    const [record] = await refreshBugReportStatuses(
+      { GITHUB_BUG_REPORT_TOKEN: "t" }, [makeRecord({ status: "pr_open", pr: openPr })],
+      9_999, fetchMock);
+    expect(record.status).toBe("pr_open");
+    expect(record.pr).toEqual(openPr);
+    expect(record.statusChangedAt).toBe(1_000);
   });
 });
