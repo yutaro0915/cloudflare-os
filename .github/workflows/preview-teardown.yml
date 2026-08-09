@@ -49,41 +49,59 @@ jobs:
             done
 
             # Auto-provisioned KV namespaces (title: cloudflare-os-<worker>-pr-<n>-<binding>).
-            curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              "$api/storage/kv/namespaces?per_page=100" \
-              | jq -r --arg re "^cloudflare-os-.*-pr-$n-" \
-                  '.result[] | select(.title | test($re)) | "\(.id) \(.title)"' \
-              | while read -r id title; do
-                  code=$(curl -s -o /tmp/del.json -w '%{http_code}' -X DELETE \
-                    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                    "$api/storage/kv/namespaces/$id")
-                  echo "delete kv $title -> HTTP $code"
-                done
+            KV_LIST=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "$api/storage/kv/namespaces?per_page=100")
+            if [ "$(printf '%s' "$KV_LIST" | jq -r '.success')" != "true" ]; then
+              echo "::warning::KV namespace list failed (token permission?): $(printf '%s' "$KV_LIST" | jq -c '.errors' 2>/dev/null)"
+            else
+              kv_total=$(printf '%s' "$KV_LIST" | jq -r '.result | length')
+              [ "$kv_total" = "100" ] && echo "::warning::KV list hit per_page=100; add pagination if fleets grow."
+              printf '%s' "$KV_LIST" \
+                | jq -r --arg re "^cloudflare-os-.*-pr-$n-" \
+                    '.result[] | select(.title | test($re)) | "\(.id) \(.title)"' \
+                | while read -r id title; do
+                    code=$(curl -s -o /tmp/del.json -w '%{http_code}' -X DELETE \
+                      -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                      "$api/storage/kv/namespaces/$id")
+                    echo "delete kv $title -> HTTP $code"
+                    case "$code" in 2*) ;; *) echo "::warning::kv delete $title returned HTTP $code";; esac
+                  done
+            fi
 
             # Auto-provisioned R2 buckets (name: cloudflare-os-<worker>-pr-<n>-<binding>).
             # Buckets must be emptied before deletion.
-            curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              "$api/r2/buckets?per_page=100" \
-              | jq -r --arg re "^cloudflare-os-.*-pr-$n-" \
-                  '.result.buckets[]? | select(.name | test($re)) | .name' \
-              | while read -r bucket; do
-                  for _ in $(seq 1 10); do
-                    KEYS=$(curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                      "$api/r2/buckets/$bucket/objects?per_page=1000" \
-                      | jq -r '.result[]?.key')
-                    [ -z "$KEYS" ] && break
-                    printf '%s\n' "$KEYS" | while read -r key; do
-                      enc=$(jq -rn --arg k "$key" '$k|@uri')
-                      curl -s -o /dev/null -X DELETE \
-                        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                        "$api/r2/buckets/$bucket/objects/$enc"
+            R2_LIST=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "$api/r2/buckets?per_page=100")
+            if [ "$(printf '%s' "$R2_LIST" | jq -r '.success')" != "true" ]; then
+              echo "::warning::R2 bucket list failed (token permission?): $(printf '%s' "$R2_LIST" | jq -c '.errors' 2>/dev/null)"
+            else
+              printf '%s' "$R2_LIST" \
+                | jq -r --arg re "^cloudflare-os-.*-pr-$n-" \
+                    '.result.buckets[]? | select(.name | test($re)) | .name' \
+                | while read -r bucket; do
+                    for _ in $(seq 1 10); do
+                      OBJ=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                        "$api/r2/buckets/$bucket/objects?per_page=1000")
+                      if [ "$(printf '%s' "$OBJ" | jq -r '.success')" != "true" ]; then
+                        echo "::warning::r2 object list for $bucket failed: $(printf '%s' "$OBJ" | jq -c '.errors' 2>/dev/null)"
+                        break
+                      fi
+                      KEYS=$(printf '%s' "$OBJ" | jq -r '.result[]?.key')
+                      [ -z "$KEYS" ] && break
+                      printf '%s\n' "$KEYS" | while read -r key; do
+                        enc=$(jq -rn --arg k "$key" '$k|@uri')
+                        curl -s -o /dev/null -X DELETE \
+                          -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                          "$api/r2/buckets/$bucket/objects/$enc"
+                      done
                     done
+                    code=$(curl -s -o /tmp/del.json -w '%{http_code}' -X DELETE \
+                      -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                      "$api/r2/buckets/$bucket")
+                    echo "delete r2 $bucket -> HTTP $code"
+                    case "$code" in 2*) ;; *) echo "::warning::r2 delete $bucket returned HTTP $code (non-empty?)";; esac
                   done
-                  code=$(curl -s -o /tmp/del.json -w '%{http_code}' -X DELETE \
-                    -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                    "$api/r2/buckets/$bucket")
-                  echo "delete r2 $bucket -> HTTP $code"
-                done
+            fi
           }
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -91,12 +109,19 @@ jobs:
             exit 0
           fi
 
-          # Sweep: every deployed -pr-N fleet whose PR is not open gets deleted.
-          NAMES=$(curl -sf -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+          # Sweep: every -pr-N fleet whose PR is not open gets deleted. PR numbers are
+          # collected from workers AND leftover KV/R2 names, so orphaned storage is
+          # reclaimed even after its worker is already gone (issue #25).
+          NS_WORKERS=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "$api/workers/scripts?per_page=100" \
-            | jq -r '.result[].id | select(test("^cloudflare-os-workshop-pr-[0-9]+$"))')
-          for name in $NAMES; do
-            n=${name##*-pr-}
+            | jq -r '.result[]?.id | select(test("^cloudflare-os-workshop-pr-[0-9]+$")) | sub("^.*-pr-";"")')
+          NS_KV=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "$api/storage/kv/namespaces?per_page=100" \
+            | jq -r '.result[]?.title | select(test("^cloudflare-os-.*-pr-[0-9]+-")) | sub("^cloudflare-os-.*-pr-";"") | sub("-.*$";"")')
+          NS_R2=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "$api/r2/buckets?per_page=100" \
+            | jq -r '.result.buckets[]?.name | select(test("^cloudflare-os-.*-pr-[0-9]+-")) | sub("^cloudflare-os-.*-pr-";"") | sub("-.*$";"")')
+          for n in $(printf '%s\n%s\n%s\n' "$NS_WORKERS" "$NS_KV" "$NS_R2" | grep -E '^[0-9]+$' | sort -un); do
             STATE=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$n" --jq .state 2>/dev/null || echo unknown)
             if [ "$STATE" != "open" ]; then
               echo "PR #$n is $STATE; removing its fleet."
