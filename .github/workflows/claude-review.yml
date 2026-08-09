@@ -40,7 +40,14 @@ jobs:
 
             Post the review as a PR comment with
             `gh pr comment ${{ github.event.pull_request.number }} --body "..."`.
+
+            After posting: if the review contains one or more findings that MUST be
+            addressed before merge (severity: critical/required — not questions, not
+            optional style notes), run
+            `gh pr edit ${{ github.event.pull_request.number }} --add-label review-findings`
+            to queue the automated follow-up fixer (claude-review-followup.yml).
+            If there are zero such findings, do not add the label.
           claude_args: |
             --model claude-opus-5
             --effort medium
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*)"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(gh pr edit:*)"

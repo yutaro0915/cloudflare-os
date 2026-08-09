@@ -29,7 +29,28 @@ plan docs — derives from this file and must reference it instead of restating 
 - Secrets never appear in either repo or in generated configs; they are injected
   from GitHub Actions secrets at deploy time.
 
+- Review follow-up: when the automated review finds must-fix issues on a PR into
+  `main`, it adds the `review-findings` label. That label triggers an unattended
+  fixer (claude-review-followup.yml) which implements only those findings on a
+  `review-fix/pr-<N>` branch and opens a **side PR based on the original PR's
+  head branch** (never main). Merging the side PR flows the fixes into the
+  original PR, which then re-enters review/CI normally. Side PRs never trigger
+  the review (base is not main) and never trigger another follow-up (head
+  `review-fix/*` is excluded); if the fixer cannot proceed it labels the
+  original PR `needs-human` with a comment instead of exiting silently.
+
 ## Decision record
+
+### 2026-08-09 — review-findings label + side-PR follow-up fixer
+
+Adopted: the review agent signals must-fix findings mechanically (label) instead
+of relying on a human to read the sticky comment, and a follow-up agent turns
+the findings into a reviewable side PR targeting the feature branch. Rejected
+alternative: pushing fixes directly onto the PR head branch — rejected because
+it mixes agent commits into the author's branch without review and would
+re-trigger claude-review on every push (feedback loop). The side-PR shape keeps
+the original PR the single unit that faces the merge train, and its non-main
+base is itself the recursion guard.
 
 ### 2026-08-08 — per-feature environments; main = production-candidate line
 
