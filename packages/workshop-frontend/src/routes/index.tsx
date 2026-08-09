@@ -24,6 +24,23 @@ import { useToasts } from '../useToasts'
 
 type HomeSearch = { prompt?: string };
 
+// How long the first-message send may stay pending before it is treated as failed. A send on a
+// silently dead RPC session (e.g. the WebSocket idled out while the user visited a workspace and
+// came back) never settles on its own; without this bound, ChatInput's `isSending` stays true
+// forever and the composer is disabled until a full reload (issue #26).
+const CREATE_WORKSPACE_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`Timed out after ${ms}ms creating the workspace`)), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
 export const Route = createFileRoute("/")({
   component: HomePage,
   validateSearch: (search: Record<string, unknown>): HomeSearch => ({
@@ -100,12 +117,15 @@ export function HomePageContent({ prompt }: HomeSearch) {
     }
   }, [authenticatedApi]);
 
+  // Disposed on unmount, and whenever the RPC session is replaced (reconnect gives a new
+  // `authenticatedApi`): a provisional gadget from the old session can never be consumed, and
+  // sending through it would hang (issue #26).
   useEffect(() => {
     return () => {
       provisionalOverseerRef.current?.stub[Symbol.dispose]();
       provisionalOverseerRef.current = null;
     };
-  }, []);
+  }, [authenticatedApi]);
 
   const handleSend = useCallback(
     async (
@@ -120,10 +140,12 @@ export function HomePageContent({ prompt }: HomeSearch) {
         ensureProvisionalGadget();
         const overseer = provisionalOverseerRef.current!.stub;
         // Pipeline both independent calls in one batch, but settle both before releasing the stub.
-        const [chat, {id}] = await Promise.all([
+        // Bounded: on a silently dead session these calls never settle, which would leave the
+        // composer disabled forever (issue #26) — fail instead so the user can retry.
+        const [chat, {id}] = await withTimeout(Promise.all([
           overseer.newChat(message, modelId, capsules, attachments, formats, agentId),
           overseer.getMetadata(),
-        ]);
+        ]), CREATE_WORKSPACE_TIMEOUT_MS);
         provisionalOverseerRef.current?.stub[Symbol.dispose]();
         provisionalOverseerRef.current = null;
         // Open the conversation we just started.
