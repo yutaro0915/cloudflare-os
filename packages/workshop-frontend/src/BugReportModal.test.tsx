@@ -139,6 +139,13 @@ describe('BugReportModal', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
+  it('discloses that page context and the display name become public', () => {
+    render(<BugReportModal visible onClose={() => {}} authenticatedApi={makeApi()} />)
+    expect(container.textContent).toContain('posted to a public GitHub issue')
+    expect(container.textContent).toContain("selected element's HTML")
+    expect(container.textContent).toContain('may default to part of your email address')
+  })
+
   it('shows a Japanese error toast when submission fails', async () => {
     const api = makeApi({
       submitBugReport: vi.fn<() => Promise<never>>().mockRejectedValue(new Error('boom')),

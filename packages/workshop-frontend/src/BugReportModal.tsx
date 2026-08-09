@@ -195,6 +195,20 @@ export default function BugReportModal({ visible, onClose, authenticatedApi }: B
               )}
             </div>
 
+            {picked && (
+              <div className="flex flex-col gap-1">
+                <span className="text-[12px] text-kumo-subtle">
+                  HTML excerpt below will be included in the public issue:
+                </span>
+                <pre
+                  data-testid="picked-element-preview"
+                  className="max-h-28 overflow-auto rounded-lg border border-kumo-line bg-kumo-tint px-3 py-2 text-[11px] leading-[16px] text-kumo-subtle whitespace-pre-wrap break-all"
+                >
+                  {picked.html}
+                </pre>
+              </div>
+            )}
+
             <div className="rounded-lg border border-kumo-line bg-kumo-tint px-3 py-2 text-[12px] text-kumo-subtle">
               <div>Included automatically:</div>
               <div className="truncate">URL: {typeof window !== 'undefined' ? window.location.href : ''}</div>
@@ -202,7 +216,14 @@ export default function BugReportModal({ visible, onClose, authenticatedApi }: B
               <div>
                 Viewport: {typeof window !== 'undefined' ? `${window.innerWidth}x${window.innerHeight}` : ''}
               </div>
-              <div>Your account display name will appear on the public GitHub issue.</div>
+              <div>
+                Everything above — including the URL and any selected element&apos;s HTML — is
+                posted to a public GitHub issue.
+              </div>
+              <div>
+                Your display name (which may default to part of your email address) will also
+                appear on the issue.
+              </div>
             </div>
 
             <Checkbox

@@ -818,6 +818,15 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     return allowed;
   }
 
+  // Release the most recently claimed slot, for when issue creation fails after the claim
+  // (upstream 5xx etc.) so the failed attempt doesn't count against the user's window.
+  async releaseBugReportSlot(): Promise<void> {
+    let timestamps = this.storage.bugReportTimestamps.get();
+    if (timestamps.length === 0) return;
+    let newest = timestamps.indexOf(Math.max(...timestamps));
+    this.storage.bugReportTimestamps.put(timestamps.filter((_, i) => i !== newest));
+  }
+
   // DO NOT MAKE PUBLIC -- returns API keys.
   async getChatContext(modelId: string | null, agentId?: string | null): Promise<UserChatContext> {
     let gwConfig = getAiGatewayConfig(this.env);

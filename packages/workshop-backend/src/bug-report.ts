@@ -140,20 +140,28 @@ export function assertBugReportSubmittable(env: BugReportEnv, report: BugReportI
 }
 
 // Full submission flow in dependency-injectable form: validate first, then claim a rate-limit
-// slot, then create the issue. Order matters — see assertBugReportSubmittable.
+// slot, then create the issue. Order matters — see assertBugReportSubmittable. If GitHub
+// rejects the request after the slot was claimed (e.g. 5xx / bad credentials), the slot is
+// released again via `releaseSlot` so transient upstream failures don't eat the user's window.
 export async function submitBugReportFlow(
   env: BugReportEnv,
   reporter: BugReporterInfo,
   report: BugReportInput,
   claimSlot: () => Promise<boolean>,
   fetchImpl: typeof fetch = fetch,
+  releaseSlot: () => Promise<void> = async () => {},
 ): Promise<BugReportResult> {
   assertBugReportSubmittable(env, report);
   if (!await claimSlot()) {
     throw new Error(
       "バグ報告の送信回数が上限に達しました（10 分間に 3 件まで）。時間をおいて再度お試しください。");
   }
-  return createBugReportIssue(env, reporter, report, fetchImpl);
+  try {
+    return await createBugReportIssue(env, reporter, report, fetchImpl);
+  } catch (error) {
+    await releaseSlot().catch(() => {});
+    throw error;
+  }
 }
 
 // Create a GitHub issue for the report. `fetchImpl` is injectable for tests.
@@ -163,18 +171,9 @@ export async function createBugReportIssue(
   report: BugReportInput,
   fetchImpl: typeof fetch = fetch,
 ): Promise<BugReportResult> {
+  assertBugReportSubmittable(env, report);
   const description = capString(report.description, MAX_DESCRIPTION_CHARS);
-  if (!description.trim()) {
-    throw new Error("Bug report description must not be empty.");
-  }
-  const token = env.GITHUB_BUG_REPORT_TOKEN;
-  if (!token) {
-    // 501-equivalent: the deployment has not configured bug reporting.
-    throw new Error(
-      "Bug reporting is not configured on this deployment " +
-      "(missing GITHUB_BUG_REPORT_TOKEN secret).",
-    );
-  }
+  const token = env.GITHUB_BUG_REPORT_TOKEN!;
 
   const title = "[Bug Report] " +
     neutralizeMentions(description.trim().split("\n")[0]).replace(/[`\r]/g, " ").slice(0, 80);

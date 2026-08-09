@@ -73,7 +73,7 @@ jobs:
 
       - name: Checkout bug-assets branch
         if: steps.shot.outputs.captured == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: repo
           fetch-depth: 1
@@ -100,11 +100,24 @@ jobs:
           cp ../screenshot.png "screenshots/${name}"
           git add "screenshots/${name}"
           git commit -m "bug-evidence: screenshot for issue #${ISSUE_NUMBER}"
-          git push origin bug-assets
+          # Retry with fetch+rebase: another issue's run may have pushed between our fetch and
+          # push (the concurrency group is per-issue, so cross-issue races are possible).
+          pushed=false
+          for _attempt in 1 2 3; do
+            if git push origin bug-assets; then
+              pushed=true
+              break
+            fi
+            git fetch origin bug-assets:refs/remotes/origin/bug-assets || true
+            git rebase origin/bug-assets || { git rebase --abort || true; break; }
+          done
+          echo "pushed=${pushed}" >> "$GITHUB_OUTPUT"
           echo "asset_path=screenshots/${name}" >> "$GITHUB_OUTPUT"
 
       - name: Comment on issue
-        if: steps.shot.outputs.captured == 'true'
+        # Only link the image when the asset push actually succeeded — a broken image link is
+        # worse than the explicit failure comment below.
+        if: steps.shot.outputs.captured == 'true' && steps.push.outputs.pushed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
@@ -114,4 +127,19 @@ jobs:
           url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/bug-assets/${ASSET_PATH}"
           # shellcheck disable=SC2016  # the backticked route is markdown, not shell expansion
           body="$(printf '<!-- bug-evidence -->\n自動収集した証跡です。本番環境の `%s` のスクリーンショットを添付します（ログインが必要な画面の場合はログイン画面が写ります）。\n\n![screenshot](%s)' "$ROUTE" "$url")"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$body"
+
+      - name: Comment failure on issue
+        # Leave a marker comment even when evidence collection failed, so the run is visibly
+        # accounted for and the dedupe check prevents pointless re-runs.
+        if: >-
+          steps.dedupe.outputs.skip != 'true' &&
+          (steps.shot.outputs.captured != 'true' || steps.push.outputs.pushed != 'true')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ROUTE: ${{ steps.route.outputs.route }}
+        run: |
+          # shellcheck disable=SC2016  # the backticked route is markdown, not shell expansion
+          body="$(printf '<!-- bug-evidence -->\n証跡の自動収集に失敗しました（対象 route: `%s`）。スクリーンショットの撮影または保存ができなかったため、本 issue には画像を添付できません。詳細は Actions のログをご確認ください。' "$ROUTE")"
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$body"
