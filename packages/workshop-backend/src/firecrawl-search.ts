@@ -41,6 +41,10 @@ type FirecrawlSearchResponse = {
   };
 };
 
+// Matches web-fetch.ts: without an abort the call can hang until the Worker's own limit,
+// stalling the whole agent turn with no error returned to the model.
+const FETCH_TIMEOUT_MS = 30_000;
+
 function clampLimit(limit: number | undefined): number {
   if (limit === undefined || !Number.isFinite(limit)) return 10;
   return Math.max(1, Math.min(20, Math.floor(limit)));
@@ -56,14 +60,28 @@ export async function firecrawlSearch(
   let sources: ("web" | "news")[] =
       input.sources?.length ? [...new Set(input.sources)] : ["web"];
 
-  let response = await fetchFn("https://api.firecrawl.dev/v2/search", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(env.apiKey ? {"authorization": `Bearer ${env.apiKey}`} : {}),
-    },
-    body: JSON.stringify({query: input.query, limit: clampLimit(input.limit), sources}),
-  });
+  let abortController = new AbortController();
+  let timeoutId = setTimeout(() => abortController.abort(), FETCH_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetchFn("https://api.firecrawl.dev/v2/search", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(env.apiKey ? {"authorization": `Bearer ${env.apiKey}`} : {}),
+      },
+      body: JSON.stringify({query: input.query, limit: clampLimit(input.limit), sources}),
+      signal: abortController.signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && (err.name === "AbortError" || /abort/i.test(err.message))) {
+      throw new Error(`Firecrawl search timed out after ${FETCH_TIMEOUT_MS}ms`, {cause: err});
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
   if (!response.ok) {
     let hint = !env.apiKey && (response.status === 429 || response.status === 402)
         ? " The keyless tier's shared rate limit may be exhausted; installing a" +

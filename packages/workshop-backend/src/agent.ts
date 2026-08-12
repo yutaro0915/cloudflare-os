@@ -1706,6 +1706,12 @@ export async function runAgent(
                   }
                   toolOutput = {text: toolCall.output};
                   break;
+                case "firecrawlSearch":
+                  if (toolCall.output === undefined) {
+                    throw new Error("firecrawlSearch tool call in log is missing output");
+                  }
+                  toolOutput = {text: toolCall.output};
+                  break;
                 case "observeUserChanges":
                   // The agent shouldn't call this tool explicitly (synthetic calls are
                   // reconstructed from "changes"/"revert" messages, not stored in the log), but
