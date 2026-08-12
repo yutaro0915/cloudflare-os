@@ -26,6 +26,7 @@ import { foldProposedChanges, isCompactionTurn, type ChangeBatch } from "./agent
 import { ambientGatekeeperMode } from "./provisioning-policy";
 import { listFeaturedBlueprintsFromKv, readBlueprintContent, readBlueprintKvRecord, sanitizeBlueprintOutput } from "./blueprint-archive";
 import { WebFetchEnv } from "./web-fetch";
+import { FirecrawlSearchEnv } from "./firecrawl-search";
 import { UserDurableObject, UserAiModelRecord, type UserChatContext, type WorkspaceOutputEntry } from "./user";
 import { AgentSpawnerBinding } from "./agent-spawner-binding";
 import { recordAnalytics } from "./analytics";
@@ -2825,6 +2826,19 @@ class OverseerImpl implements AgentHooks {
       ai: this.env.WORKERS_AI,
       gateway: getAiGatewayConfig(this.env),
     };
+  }
+
+  // Provides firecrawlSearch with the deployment's optional Firecrawl API key (absent =
+  // Firecrawl's keyless starter tier). Applies the same sharing guard as getWebFetchEnv():
+  // search queries are outbound text, so a workspace that has observed sensitive data must
+  // not send them to a third-party API.
+  getFirecrawlSearchEnv(): FirecrawlSearchEnv {
+    if (this.storage.prohibitAllSharing.get()) {
+      throw new Error(
+          "This workspace has observed sensitive data. To prevent leaks, the workspace is prohibited " +
+          "from sending search queries to public web services.");
+    }
+    return {apiKey: this.env.FIRECRAWL_API_KEY};
   }
 
   // Record an observation that originated from a built-in agent tool (not a gatekeeper).
