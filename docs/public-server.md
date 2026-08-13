@@ -46,6 +46,10 @@ CF_AI_GATEWAY_API_TOKEN=...
 
 # To send Workers AI straight to its REST endpoint (no gateway, no cost logs):
 CF_AI_GATEWAY_WAI_DIRECT=true
+
+# Optional: firecrawlSearch works without a key on Firecrawl's shared keyless tier.
+# Set this Worker secret to raise the search rate limit:
+FIRECRAWL_API_KEY=...
 ```
 
 Gateway mode always requires `CF_AI_GATEWAY_ACCOUNT_ID` and `CF_AI_GATEWAY_API_TOKEN`; the token
@@ -54,6 +58,11 @@ needs AI Gateway Run and Read permissions so Gadgets can execute models and repo
 same Gateway ID; set `CF_AI_GATEWAY_WAI` to route it through a different Gateway in the same
 account, or `CF_AI_GATEWAY_WAI_DIRECT=true` to bypass gateways and call the Workers AI REST
 endpoint directly (using the same account/token pair; such requests produce no cost logs).
+
+The built-in `firecrawlSearch` tool does not require an API key. Without
+`FIRECRAWL_API_KEY`, it uses Firecrawl's keyless tier whose rate limit is shared by public egress
+IP. Installing the value as a Workshop Worker secret raises the limit; never place a production
+key in a tracked file.
 
 When using `CF_AI_GATEWAY*` in local development, start the server with
 `pnpm run dev-server -- --use-workers-ai-binding` so the webFetch tool's document-to-Markdown

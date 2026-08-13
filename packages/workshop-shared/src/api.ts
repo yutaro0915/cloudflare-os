@@ -1030,6 +1030,7 @@ export const CUSTOM_AGENT_TOOL_NAMES = [
   "writeFile",
   "editFile",
   "webFetch",
+  "firecrawlSearch",
   "observeUserChanges",
   "describeBinding",
   "setGadgetBinding",
@@ -2327,6 +2328,19 @@ export type AiToolCall = {
   // Output, if the fetch actually completed. (Otherwise, `error` should be present.) This is
   // stored so that the agent's chat history can be replayed without re-issuing the fetch.
   // Formatted as a YAML-frontmatter header followed by the body (see formatWebFetchResult).
+  output?: string;
+} | {
+  toolName: "firecrawlSearch";
+  input: {
+    query: string;
+    // Max results per source (1-20).
+    limit?: number;
+    // Result lists to search; defaults to ["web"].
+    sources?: ("web" | "news")[];
+  };
+
+  // Output, if the search actually completed. (Otherwise, `error` should be present.) Stored
+  // so that the agent's chat history can be replayed without re-issuing the search.
   output?: string;
 } | {
   // This actually shouldn't ever appear in logs unless the agent misunderstands the tool.

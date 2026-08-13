@@ -23,6 +23,11 @@ declare global {
       // Note: outside gateway mode, Workers AI (provider "cloudflare") is BYOK like every other
       // provider -- the account ID and API token live in the user's model config, not in env.
 
+      // Optional Firecrawl API key for the built-in firecrawlSearch agent tool. When absent
+      // the tool uses Firecrawl's keyless starter tier (rate limits shared per egress IP);
+      // installing the key as a Worker secret raises the limits.
+      FIRECRAWL_API_KEY?: string;
+
       // Blueprint storage bindings.
       BLUEPRINTS: KVNamespace;             // Workers KV for blueprint metadata lookup
       BLUEPRINT_CONTENT: R2Bucket;         // R2 bucket for blueprint code snapshots

@@ -683,6 +683,8 @@ function getToolCallSummary(
       }
       return { verb: "Fetched", target };
     }
+    case "firecrawlSearch":
+      return { verb: "Searched", target: tc.input.query };
     case "observeUserChanges":
       return { verb: "Observed user changes" };
     case "listBlueprints":
@@ -748,6 +750,8 @@ function describeToolCallCount(toolName: AiToolCall["toolName"], count: number):
       return count === 1 ? "Made 1 edit" : `Made ${count} edits`;
     case "webFetch":
       return `Fetched ${pluralize(count, "page")}`;
+    case "firecrawlSearch":
+      return `Ran ${pluralize(count, "web search")}`;
     case "executeCode":
       return count === 1 ? "Ran code" : `Ran code ${formatTimes(count)}`;
     case "describeBinding":
@@ -794,6 +798,8 @@ function getToolIcon(
       return Terminal;
     case "webFetch":
       return Globe;
+    case "firecrawlSearch":
+      return MagnifyingGlass;
     case "describeBinding":
       return MagnifyingGlass;
     case "setBindingHook":
@@ -835,6 +841,8 @@ function getProvisionalToolLabel(toolName: AiToolCall["toolName"] | null | undef
       return "Running code";
     case "webFetch":
       return "Fetching web page";
+    case "firecrawlSearch":
+      return "Searching the web";
     case "observeUserChanges":
       return "Observing user changes";
     case "giveUp":
@@ -863,6 +871,7 @@ function getProvisionalToolVerb(toolName: AiToolCall["toolName"]): string {
     case "createGadget": return "Creating gadget";
     case "executeCode": return "Running code";
     case "webFetch": return "Fetching";
+    case "firecrawlSearch": return "Searching the web";
     case "observeUserChanges": return "Observing user changes";
     case "giveUp": return "Stopping";
     case "readSkill": return "Loading skill";
@@ -882,6 +891,7 @@ function describeProvisionalToolCount(toolName: AiToolCall["toolName"], count: n
     case "writeFile": return `Writing ${pluralize(count, "file")}`;
     case "editFile": return `Making ${count} edits`;
     case "webFetch": return `Fetching ${pluralize(count, "page")}`;
+    case "firecrawlSearch": return `Running ${pluralize(count, "web search")}`;
     case "executeCode": return count === 1 ? "Running code" : `Running code ${formatTimes(count)}`;
     case "describeBinding": return `Inspecting ${pluralize(count, "binding")}`;
     case "setBindingHook": return `Connecting ${pluralize(count, "binding")}`;
