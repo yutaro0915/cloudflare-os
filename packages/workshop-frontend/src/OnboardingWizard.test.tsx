@@ -36,7 +36,7 @@ describe('OnboardingWizard', () => {
     vi.clearAllMocks()
   })
 
-  it('shows the remote build note on the first onboarding screen', async () => {
+  it('renders the intro copy on the first onboarding screen', async () => {
     vi.mocked(useAuthenticatedApi).mockReturnValue({
       authenticatedApi,
       currentUser: { type: 'user', id: 'user-1', name: 'Test User' },
@@ -51,6 +51,5 @@ describe('OnboardingWizard', () => {
     await act(async () => root!.render(<OnboardingWizard onComplete={vi.fn()} />))
 
     expect(container.textContent).toContain('Just a few things before you start building')
-    expect(container.textContent).toContain('Built remotely on case')
   })
 })

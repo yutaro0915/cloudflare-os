@@ -380,13 +380,6 @@ export default function OnboardingWizard({
           >
             Just a few things before you start building
           </p>
-          <p
-            className={`mt-1 text-xs text-kumo-inactive transition-all duration-500 delay-300 ${
-              mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'
-            }`}
-          >
-            Built remotely on case
-          </p>
         </div>
 
         {/* Step indicator */}
