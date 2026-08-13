@@ -328,8 +328,8 @@ export interface AgentHooks {
   // so the dependency surface stays explicit.
   getWebFetchEnv(): WebFetchEnv;
 
-  // Returns the Firecrawl API key `firecrawlSearch` needs. Throws when the deployment has no
-  // key installed or when the workspace prohibits sharing (queries would leak observed data).
+  // Returns the optional Firecrawl API key for `firecrawlSearch`. Throws when the workspace
+  // prohibits sharing because search queries would leak observed data.
   getFirecrawlSearchEnv(): FirecrawlSearchEnv;
 
   // Deployment-wide, admin-authored instructions to append to the agent's system prompt. Returns

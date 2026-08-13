@@ -89,7 +89,14 @@ export async function firecrawlSearch(
         : "";
     throw new Error(`Firecrawl search failed (HTTP ${response.status}).${hint}`);
   }
-  let data = await response.json() as FirecrawlSearchResponse;
+  let data: FirecrawlSearchResponse;
+  try {
+    data = await response.json() as FirecrawlSearchResponse;
+  } catch (err) {
+    throw new Error(
+        `Firecrawl search returned a non-JSON response (HTTP ${response.status}).`,
+        {cause: err});
+  }
   if (data.success === false) {
     throw new Error(`Firecrawl search failed: ${data.error ?? "unknown error"}`);
   }

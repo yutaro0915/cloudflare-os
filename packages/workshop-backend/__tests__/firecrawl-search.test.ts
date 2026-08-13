@@ -109,6 +109,15 @@ describe("firecrawlSearch result mapping", () => {
 });
 
 describe("firecrawlSearch errors", () => {
+  it("reports a clear error when a successful response is not JSON", async () => {
+    const fetchFn = vi.fn(async () => new Response("<html>challenge</html>", {
+      status: 200,
+      headers: {"content-type": "text/html"},
+    })) as unknown as typeof fetch;
+    await expect(firecrawlSearch(NO_KEY, {query: "q"}, fetchFn))
+      .rejects.toThrow("Firecrawl search returned a non-JSON response (HTTP 200).");
+  });
+
   it("reports the HTTP status on a failed response", async () => {
     const {fetchFn} = makeFetch({}, 500);
     await expect(firecrawlSearch(NO_KEY, {query: "q"}, fetchFn))
