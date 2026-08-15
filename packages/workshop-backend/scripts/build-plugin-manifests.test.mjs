@@ -182,6 +182,25 @@ test("rejects malformed capability declarations", async (t) => {
   }
 });
 
+test("rejects duplicate requested capabilities", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "plugin-manifests-capability-duplicate-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const sourceDir = join(root, "input");
+  const outFile = join(root, "generated", "plugin-manifests.ts");
+  await mkdir(sourceDir);
+  await writeFile(join(sourceDir, "notes.json"), JSON.stringify({
+    schemaVersion: 1,
+    pluginId: "example.notes",
+    packageVersion: "1.0.0",
+    requestedCapabilities: ["ui.panel", "ui.panel"],
+  }));
+
+  await assert.rejects(
+    runBuild(sourceDir, outFile),
+    /notes\.json: requestedCapabilities must not contain duplicates/,
+  );
+});
+
 test("rejects duplicate exact plugin versions", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "plugin-manifests-duplicate-"));
   t.after(() => rm(root, {recursive: true, force: true}));

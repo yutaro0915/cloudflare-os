@@ -285,10 +285,40 @@ function isOpenGadgetErrorCode(value: unknown): value is OpenGadgetErrorCode {
       value === OPEN_GADGET_ERROR_CODES.workspaceAccessDenied;
 }
 
+/** Foreground approval for installing one exact user-scoped plugin version. */
+export interface InstallUserPluginRequest {
+  /** Stable package identifier to resolve. */
+  pluginId: string;
+
+  /** Exact package version to resolve without range selection. */
+  packageVersion: string;
+
+  /** Manifest capabilities the authenticated user approves individually. */
+  approvedCapabilities: string[];
+}
+
+/** Result of resolving and persisting one user-scoped plugin installation. */
+export type InstallUserPluginResult = {
+  /** The verified desired state and its audit event were persisted. */
+  ok: true;
+
+  /** Host-issued identifier for this installation lifecycle. */
+  installationId: string;
+} | {
+  /** The request was rejected without changing desired state. */
+  ok: false;
+
+  /** Stable reason the authenticated user can correct. */
+  error: "PLUGIN_VERSION_NOT_FOUND" | "CAPABILITY_APPROVAL_MISMATCH";
+};
+
 // Top-level API exposed to the user after they have authenticated.
 export interface AuthenticatedApi extends RpcTarget {
   // Get profile info for the user who is logged in.
   whoami(): Promise<AiChatAuthorInfo>;
+
+  /** Install one exact user-scoped plugin after manifest and approval verification. */
+  installUserPlugin(request: InstallUserPluginRequest): Promise<InstallUserPluginResult>;
 
   // Set the user's own display name, seen in chats, etc.
   setOwnDisplayName(name: string): Promise<void>;

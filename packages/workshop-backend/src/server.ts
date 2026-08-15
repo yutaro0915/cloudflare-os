@@ -1,7 +1,7 @@
 import { RpcStub, RpcTarget, newWorkersRpcResponse } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import type { JWTPayload } from "jose";
-import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult, type MyBugReportsResult } from '@gadgets/workshop-shared/api';
+import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult, type MyBugReportsResult, type InstallUserPluginRequest, type InstallUserPluginResult } from '@gadgets/workshop-shared/api';
 import { submitBugReportFlow, refreshBugReportStatuses, bugReportIssueUrl,
          BUG_REPORT_STATUS_CACHE_MS } from "./bug-report.js";
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
@@ -31,12 +31,26 @@ import { verifyCfAccessJwt } from "./access.js";
 import { resolveUiFeatureFlags } from "./feature-flags";
 import { serveSiteLogo, SITE_LOGO_PATH } from "./site-logo.js";
 import { createWorkshopLogger } from "./observability";
+import {
+  BundledPluginManifestResolver,
+  type PluginManifestResolver,
+} from "./plugin-manifest-registry.js";
+import { BUNDLED_PLUGIN_MANIFESTS } from "./generated/plugin-manifests.js";
 
 const logger = createWorkshopLogger("workshop.server");
 
 // Set once we've asked the AdminSettings DO to install the bundled format blueprints (see the
 // fetch handler), so later requests skip the call. The DO holds the real answer.
 let formatBlueprintInstallStarted = false;
+const pluginManifestResolver = BundledPluginManifestResolver.create(BUNDLED_PLUGIN_MANIFESTS);
+
+function approvalsExactlyMatch(
+    requested: readonly string[], approved: readonly string[]): boolean {
+  if (requested.length !== approved.length) return false;
+  const approvedSet = new Set(approved);
+  return approvedSet.size === approved.length &&
+    requested.every(capability => approvedSet.has(capability));
+}
 
 function publicBlueprintInfo(id: string, metadata: BlueprintPublicInfo['metadata']): BlueprintPublicInfo {
   return {
@@ -78,7 +92,8 @@ type Env = Cloudflare.Env & {
 class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   constructor(private ctx: ExecutionContext, private env: Env,
       private user: DurableObjectStub<UserDurableObject>,
-      private abortSession: (reason: Error) => void) {
+      private abortSession: (reason: Error) => void,
+      private pluginManifests: Promise<PluginManifestResolver>) {
     super();
 
     this.overseers = this.ctx.exports.OverseerDurableObject;
@@ -111,6 +126,33 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
 
   whoami(): Promise<AiChatAuthorInfo> {
     return this.user.whoami();
+  }
+  async installUserPlugin(
+      request: InstallUserPluginRequest): Promise<InstallUserPluginResult> {
+    const resolver = await this.pluginManifests;
+    const manifest = await resolver.resolve(request.pluginId, request.packageVersion);
+    if (manifest === null) return {ok: false, error: "PLUGIN_VERSION_NOT_FOUND"};
+    if (!approvalsExactlyMatch(
+      manifest.requestedCapabilities,
+      request.approvedCapabilities,
+    )) {
+      return {ok: false, error: "CAPABILITY_APPROVAL_MISMATCH"};
+    }
+
+    const installationId = crypto.randomUUID();
+    const result = await this.user.putUserPluginInstallation({
+      installationId,
+      pluginId: manifest.pluginId,
+      packageVersion: manifest.packageVersion,
+      manifestDigest: manifest.manifestDigest,
+      enabled: true,
+      grantedCapabilities: [...manifest.requestedCapabilities],
+      config: null,
+    });
+    if (!result.ok) {
+      throw new Error("Verified plugin manifest was rejected by UserDurableObject.");
+    }
+    return {ok: true, installationId};
   }
   setOwnDisplayName(name: string): Promise<void> {
     return this.user.setOwnDisplayName(name);
@@ -716,6 +758,7 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
 
   constructor(private ctx: ExecutionContext, private env: Env,
       private abortSession: (reason: Error) => void,
+      private pluginManifests: Promise<PluginManifestResolver>,
       private accessPayload?: JWTPayload) {
     super();
     this.users = this.ctx.exports.UserDurableObject;
@@ -765,7 +808,9 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
       user_id: userId.toString(),
       source: "session_token",
     });
-    return new AuthenticatedApiImpl(this.ctx, this.env, stub, this.abortSession);
+    return new AuthenticatedApiImpl(
+      this.ctx, this.env, stub, this.abortSession, this.pluginManifests,
+    );
   }
 
   async authenticateFromCfAccess(): Promise<AuthenticatedApi> {
@@ -790,7 +835,9 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
       user_id: userId.toString(),
       source: "cf_access",
     });
-    return new AuthenticatedApiImpl(this.ctx, this.env, stub, this.abortSession);
+    return new AuthenticatedApiImpl(
+      this.ctx, this.env, stub, this.abortSession, this.pluginManifests,
+    );
   }
 
   async login(username: string, passwordHash: Uint8Array): Promise<string | null> {
@@ -941,7 +988,7 @@ export default {
       };
 
       resp = await newWorkersRpcResponse(req,
-          new PublicApiImpl(ctx, env, abortSession, accessPayload));
+          new PublicApiImpl(ctx, env, abortSession, pluginManifestResolver, accessPayload));
 
       if (aborted) {
         // Oops, we missed the abortSession() call while awaiting, apply now.

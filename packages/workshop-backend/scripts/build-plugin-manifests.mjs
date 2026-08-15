@@ -57,6 +57,9 @@ function parseManifest(file, parsed) {
       `${file}: requestedCapabilities must contain only non-empty strings`,
     );
   }
+  if (new Set(requestedCapabilities).size !== requestedCapabilities.length) {
+    throw new TypeError(`${file}: requestedCapabilities must not contain duplicates`);
+  }
   return {schemaVersion, pluginId, packageVersion, requestedCapabilities};
 }
 
