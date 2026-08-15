@@ -37,7 +37,7 @@ describe("production plugin runtime loopback", () => {
     const first = await authenticated.installUserPlugin({
       pluginId: "test.runtime-metadata",
       packageVersion: "1.0.0",
-      approvedCapabilities: ["workspace.metadata.read"],
+      approvedCapabilities: ["plugin.state.read", "workspace.metadata.read"],
     });
     if (!first.ok) throw new Error("Expected initial capability installation to succeed.");
 
@@ -69,13 +69,34 @@ describe("production plugin runtime loopback", () => {
     await expect(authenticated.installUserPlugin({
       pluginId: "test.runtime-metadata",
       packageVersion: "1.0.0",
-      approvedCapabilities: ["workspace.metadata.read"],
+      approvedCapabilities: ["plugin.state.read", "workspace.metadata.read"],
     })).resolves.toEqual({ok: true, installationId: first.installationId});
     using recoveredSession = authenticated.openGadget(workspaceId);
     await recoveredSession.getMetadata();
     await expect(workspaceHost.assertPluginWorkspaceMetadataCapabilityForHost(
       userId, "build", "test.runtime-metadata",
     )).resolves.toBeUndefined();
+
+    await expect(authenticated.uninstallUserPlugin({
+      pluginId: "test.runtime-metadata",
+      expectedInstallationId: first.installationId,
+    })).resolves.toEqual({
+      ok: true,
+      installationId: first.installationId,
+      retainedState: true,
+    });
+    await expect(workspaceHost.assertPluginWorkspaceMetadataCapabilityForHost(
+      userId, "build", "test.runtime-metadata",
+    )).rejects.toThrow("Plugin runtime lifecycle is no longer authorized");
+    await expect(workspaceHost.assertPluginRuntimeActiveForHost(
+      userId, "build", "test.runtime-metadata",
+    )).rejects.toThrow("Plugin runtime plugin is inactive");
+    await expect(authenticated.listDetachedUserPluginStates()).resolves.toMatchObject([{
+      installationId: first.installationId,
+      pluginId: "test.runtime-metadata",
+      packageVersion: "1.0.0",
+      detachedAt: expect.any(Number),
+    }]);
 
     recoveredSession[Symbol.dispose]();
     refreshSession[Symbol.dispose]();
@@ -86,9 +107,9 @@ describe("production plugin runtime loopback", () => {
 
     const beforeRestart = authenticated.openGadget(workspaceId);
     await beforeRestart.getMetadata();
-    await expect(workspaceHost.assertPluginWorkspaceMetadataCapabilityForHost(
+    await expect(workspaceHost.assertPluginRuntimeActiveForHost(
       userId, "build", "test.runtime-metadata",
-    )).resolves.toBeUndefined();
+    )).rejects.toThrow("Plugin runtime plugin is inactive");
     await abortAllDurableObjects();
     const reconstructed = exports.OverseerDurableObject.get(
       exports.OverseerDurableObject.idFromString(workspaceId),

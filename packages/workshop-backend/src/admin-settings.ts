@@ -28,6 +28,8 @@ import {
   isPluginRuntimeCapabilityAuthorized,
   isPluginRuntimeCandidateCurrent,
   type PluginRuntimeCandidateClaim,
+  type PluginRuntimeLifecycleClaim,
+  isPluginRuntimeLifecycleAuthorized,
 } from './plugin-installation.js';
 
 const logger = createWorkshopLogger("workshop.admin.settings");
@@ -144,6 +146,15 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
     if (claim.scope !== "deployment" || claim.targetId !== this.ctx.id.toString()) return false;
     const installation = this.storage.deploymentPluginInstallations.get(claim.pluginId);
     return installation !== undefined && isPluginRuntimeCandidateCurrent(installation, claim);
+  }
+
+  /** Checks the deployment-owned active lifecycle before untrusted plugin invocation. */
+  async authorizePluginLifecycleForRuntimeHost(
+      claim: PluginRuntimeLifecycleClaim): Promise<boolean> {
+    if (claim.scope !== "deployment" || claim.targetId !== this.ctx.id.toString()) return false;
+    const installation = this.storage.deploymentPluginInstallations.get(claim.pluginId);
+    return installation !== undefined &&
+      isPluginRuntimeLifecycleAuthorized(installation, claim);
   }
 
   /** Fails closed for malformed values and otherwise checks the permanent deployment denylist. */

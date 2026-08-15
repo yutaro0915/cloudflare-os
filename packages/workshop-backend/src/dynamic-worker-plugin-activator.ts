@@ -32,6 +32,11 @@ function pluginContext(env) {
       read: () => env.WORKSPACE_METADATA.read(),
     });
   }
+  if (env.PLUGIN_STATE !== undefined) {
+    capabilities.state = Object.freeze({
+      read: key => env.PLUGIN_STATE.read(key),
+    });
+  }
   return Object.freeze({capabilities: Object.freeze(capabilities)});
 }
 

@@ -12,6 +12,7 @@ import { resolveEffectivePluginConfiguration } from "./plugin-effective-configur
 import { InMemoryPluginCapabilityGateRegistry } from "./plugin-capability-gate.js";
 import type {
   PluginCapabilityAuthority,
+  PluginActiveInstallationAuthority,
   PluginStagedInstallationAuthority,
 } from "./plugin-capability-gate.js";
 import type { VerifyingPluginCodeArtifactResolver } from "./plugin-code-artifact.js";
@@ -149,6 +150,18 @@ export class ReconciledPluginRuntimeRealm implements PluginRuntimeRealm {
       capability: string): PluginCapabilityAuthority | undefined {
     const authority = this.#gates.capabilityAuthority(
       pluginId, activationKey, manifestDigest, capability, "active",
+    );
+    return authority?.leaseEpoch === this.#reconciler.activeLeaseEpoch(pluginId)
+      ? authority
+      : undefined;
+  }
+
+  activeInstallationAuthority(
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): PluginActiveInstallationAuthority | undefined {
+    const authority = this.#gates.activeInstallationAuthority(
+      pluginId, activationKey, manifestDigest,
     );
     return authority?.leaseEpoch === this.#reconciler.activeLeaseEpoch(pluginId)
       ? authority

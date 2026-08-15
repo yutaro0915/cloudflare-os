@@ -42,6 +42,12 @@ export interface PluginStagedInstallationAuthority {
   installation: EffectivePluginInstallation;
 }
 
+/** Exact active installation selected by the local token-matched gate. */
+export interface PluginActiveInstallationAuthority {
+  installation: EffectivePluginInstallation;
+  leaseEpoch: string;
+}
+
 /** Creates explicit stable loopback bindings for one staged activation. */
 export type PluginCapabilityEnvFactory = (
   plan: RuntimePluginPlan,
@@ -177,6 +183,19 @@ export class InMemoryPluginCapabilityGateRegistry implements PluginCapabilityGat
       claim.manifestDigest !== manifestDigest
     ) return undefined;
     return {installation: structuredClone(claim.installation)};
+  }
+
+  /** Returns an owned installation snapshot only for one exact active claim. */
+  activeInstallationAuthority(
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): PluginActiveInstallationAuthority | undefined {
+    if (!this.isActive(pluginId, activationKey, manifestDigest)) return undefined;
+    const claim = this.#activeByPluginId.get(pluginId);
+    return claim === undefined ? undefined : {
+      installation: structuredClone(claim.installation),
+      leaseEpoch: claim.leaseEpoch,
+    };
   }
 
   /** Immediately revokes an exact denied staged or active claim before physical cleanup. */

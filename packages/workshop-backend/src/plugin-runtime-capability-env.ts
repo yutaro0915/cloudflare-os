@@ -2,7 +2,10 @@ import type { CollaboratorRole } from "@gadgets/workshop-shared/api";
 import type { PluginRuntimeRealmIdentity } from "./dynamic-worker-plugin-activator.js";
 import type { PluginRuntimeLoopbackProps } from "./plugin-runtime-loopback.js";
 import type { RuntimePluginPlan } from "./plugin-reconciler.js";
-import { WORKSPACE_METADATA_READ_CAPABILITY } from "./plugin-runtime-capabilities.js";
+import {
+  PLUGIN_STATE_READ_CAPABILITY,
+  WORKSPACE_METADATA_READ_CAPABILITY,
+} from "./plugin-runtime-capabilities.js";
 
 /** Minimal data returned to a plugin granted workspace metadata read access. */
 export interface PluginWorkspaceMetadata {
@@ -23,6 +26,9 @@ export interface PluginRuntimeBindingFactory {
 
   /** Creates the capability-specific metadata binding when and only when granted. */
   workspaceMetadata(props: PluginRuntimeLoopbackProps): unknown;
+
+  /** Creates the installation-scoped state reader only when exactly granted. */
+  pluginState(props: PluginRuntimeLoopbackProps): unknown;
 }
 
 /** Builds the explicit Dynamic Worker env from one verified plan and host-minted realm identity. */
@@ -44,6 +50,9 @@ export function makePluginRuntimeCapabilityEnv(
     PLUGIN_HOST: bindings.pluginHost(props),
     ...(plan.installation.grantedCapabilities.includes(WORKSPACE_METADATA_READ_CAPABILITY)
       ? {WORKSPACE_METADATA: bindings.workspaceMetadata(props)}
+      : {}),
+    ...(plan.installation.grantedCapabilities.includes(PLUGIN_STATE_READ_CAPABILITY)
+      ? {PLUGIN_STATE: bindings.pluginState(props)}
       : {}),
   };
 }

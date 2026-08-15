@@ -31,18 +31,19 @@ describe("plugin runtime capability env", () => {
   it("injects a metadata binding only for the exact granted capability", () => {
     const pluginHost = vi.fn(() => "plugin-host-stub");
     const workspaceMetadata = vi.fn(() => "metadata-stub");
+    const pluginState = vi.fn(() => "state-stub");
 
     const granted = makePluginRuntimeCapabilityEnv(
       REALM,
       plan(["workspace.metadata.read"]),
       "activation-a",
-      {pluginHost, workspaceMetadata},
+      {pluginHost, workspaceMetadata, pluginState},
     );
     const ungranted = makePluginRuntimeCapabilityEnv(
       REALM,
       plan([]),
       "activation-b",
-      {pluginHost, workspaceMetadata},
+      {pluginHost, workspaceMetadata, pluginState},
     );
 
     expect(granted).toEqual({
@@ -51,6 +52,7 @@ describe("plugin runtime capability env", () => {
     });
     expect(ungranted).toEqual({PLUGIN_HOST: "plugin-host-stub"});
     expect(workspaceMetadata).toHaveBeenCalledTimes(1);
+    expect(pluginState).not.toHaveBeenCalled();
     expect(workspaceMetadata.mock.calls[0]?.[0]).toMatchObject({
       overseerId: REALM.overseerId,
       userId: REALM.userId,
@@ -59,6 +61,28 @@ describe("plugin runtime capability env", () => {
       pluginId: "example.runtime",
       activationKey: "activation-a",
     });
+  });
+
+  it("injects installation state only for the exact state-read grant", () => {
+    const bindings = {
+      pluginHost: vi.fn(() => "plugin-host-stub"),
+      workspaceMetadata: vi.fn(() => "metadata-stub"),
+      pluginState: vi.fn(() => "state-stub"),
+    };
+
+    const granted = makePluginRuntimeCapabilityEnv(
+      REALM,
+      plan(["plugin.state.read"]),
+      "activation-state",
+      bindings,
+    );
+
+    expect(granted).toEqual({
+      PLUGIN_HOST: "plugin-host-stub",
+      PLUGIN_STATE: "state-stub",
+    });
+    expect(bindings.pluginState).toHaveBeenCalledTimes(1);
+    expect(bindings.workspaceMetadata).not.toHaveBeenCalled();
   });
 
 });

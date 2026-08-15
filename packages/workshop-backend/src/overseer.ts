@@ -73,6 +73,8 @@ import {
   type UserPluginInstallation,
   type PluginRuntimeCapabilityClaim,
   type PluginRuntimeCandidateClaim,
+  type PluginRuntimeLifecycleClaim,
+  isPluginRuntimeLifecycleAuthorized,
   type WorkspacePluginAuditEvent,
   type WorkspacePluginInstallationRecord,
 } from "./plugin-installation.js";
@@ -1470,6 +1472,7 @@ class OverseerImpl implements AgentHooks {
           pluginHost: props => this.ctx.exports.PluginRuntimeLoopback({props}),
           workspaceMetadata: props =>
             this.ctx.exports.PluginWorkspaceMetadataCapability({props}),
+          pluginState: props => this.ctx.exports.PluginStateReadCapability({props}),
         },
       ),
     });
@@ -6606,6 +6609,47 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     }
   }
 
+  /** Revalidates the owning lifecycle before the fixed harness enters untrusted plugin code. */
+  async authorizeActivePluginRuntimeForHost(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): Promise<void> {
+    const authority = this.impl.pluginRuntimeRealms.activeInstallationAuthority(
+      identity, pluginId, activationKey, manifestDigest,
+    );
+    if (authority === undefined) throw new Error("Plugin runtime gate denied.");
+    const installation = authority.installation;
+    const claim: PluginRuntimeLifecycleClaim = {
+      scope: installation.scope,
+      targetId: installation.targetId,
+      installationId: installation.installationId,
+      pluginId: installation.pluginId,
+    };
+    let authorized = false;
+    if (claim.scope === "workspace") {
+      const current = this.impl.storage.workspacePluginInstallations.get(claim.pluginId);
+      authorized = claim.targetId === this.ctx.id.toString() && current !== undefined &&
+        isPluginRuntimeLifecycleAuthorized(current, claim);
+    } else if (claim.scope === "user") {
+      authorized = claim.targetId === identity.userId &&
+        await this.impl.users.get(this.impl.users.idFromString(claim.targetId))
+          .authorizePluginLifecycleForRuntimeHost(claim);
+    } else {
+      const adminSettings = this.ctx.exports.AdminSettings.getByName("");
+      authorized = claim.targetId === adminSettings.id.toString() &&
+        await adminSettings.authorizePluginLifecycleForRuntimeHost(claim);
+    }
+    if (!authorized || this.impl.pluginRuntimeRealms.activeInstallationAuthority(
+      identity, pluginId, activationKey, manifestDigest,
+    ) === undefined) {
+      this.impl.pluginRuntimeRealms.denyPlugin(
+        identity, pluginId, activationKey, manifestDigest,
+      );
+      throw new Error("Plugin runtime lifecycle is no longer authorized.");
+    }
+  }
+
   /** Revalidates owner SSOT and an exact active grant before returning minimal metadata. */
   async readPluginWorkspaceMetadataForRuntimeHost(
       identity: PluginRuntimeRealmIdentity,
@@ -6664,6 +6708,74 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
       title: this.impl.storage.title.get(),
       role: identity.role,
     });
+  }
+
+  /** Reads user-owned plugin state only after owner SSOT and exact active-token revalidation. */
+  async readPluginStateForRuntimeHost(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string,
+      key: string): Promise<unknown> {
+    const authority = this.impl.pluginRuntimeRealms.activeCapabilityAuthority(
+      identity,
+      pluginId,
+      activationKey,
+      manifestDigest,
+      "plugin.state.read",
+    );
+    if (authority === undefined) throw new Error("Plugin runtime capability denied.");
+    const installation = authority.installation;
+    if (
+      installation.scope !== "user" ||
+      installation.targetId !== identity.userId ||
+      installation.stateRef === undefined
+    ) {
+      this.impl.pluginRuntimeRealms.denyPlugin(
+        identity, pluginId, activationKey, manifestDigest,
+      );
+      throw new Error("Plugin runtime state capability is unavailable.");
+    }
+    const claim: PluginRuntimeCapabilityClaim = {
+      scope: "user",
+      targetId: installation.targetId,
+      installationId: installation.installationId,
+      pluginId: installation.pluginId,
+      manifestDigest: installation.manifestDigest,
+      capability: "plugin.state.read",
+      phase: "active",
+    };
+    const user = this.impl.users.get(this.impl.users.idFromString(identity.userId));
+    if (!await user.authorizePluginCapabilityForRuntimeHost(claim)) {
+      this.impl.pluginRuntimeRealms.denyPlugin(
+        identity, pluginId, activationKey, manifestDigest,
+      );
+      throw new Error("Plugin runtime capability is no longer authorized.");
+    }
+    const states = this.ctx.exports.PluginStateDurableObject;
+    const owner = {
+      scope: "user" as const,
+      targetId: installation.targetId,
+      pluginId: installation.pluginId,
+      installationId: installation.installationId,
+    };
+    const value = await states.get(states.idFromString(installation.stateRef)).read(owner, key);
+    if (
+      !await user.authorizePluginCapabilityForRuntimeHost(claim) ||
+      this.impl.pluginRuntimeRealms.activeCapabilityAuthority(
+        identity,
+        pluginId,
+        activationKey,
+        manifestDigest,
+        "plugin.state.read",
+      ) === undefined
+    ) {
+      this.impl.pluginRuntimeRealms.denyPlugin(
+        identity, pluginId, activationKey, manifestDigest,
+      );
+      throw new Error("Plugin runtime capability is no longer authorized.");
+    }
+    return value;
   }
 
   /** Asserts bounded host operational health without returning runtime authority material. */

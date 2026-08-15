@@ -139,4 +139,77 @@ describe("authenticated user plugin installation", () => {
     await expect(owner.listUserPluginInstallations()).resolves.toEqual([]);
     await expect(owner.listUserPluginAuditEvents()).resolves.toEqual([]);
   });
+
+  it("uninstalls through the authenticated self-user boundary without exposing state refs", async () => {
+    using publicApi = await connect();
+    const account = await createAccount(publicApi, "pluginuninstall");
+    using authenticated = await publicApi.authenticate(account.token);
+    const installed = await authenticated.installUserPlugin({
+      pluginId: "test.notes",
+      packageVersion: "1.2.3",
+      approvedCapabilities: ["ui.panel", "agent.catalog.read"],
+    });
+    if (!installed.ok) throw new Error("Expected plugin installation to succeed.");
+
+    const ownerBeforeRestart = exports.UserDurableObject.getByName(account.username);
+    await expect(ownerBeforeRestart.beginUserPluginUninstall(
+      "test.notes",
+      installed.installationId,
+    )).resolves.toEqual({
+      ok: true,
+      installationId: installed.installationId,
+    });
+    await abortAllDurableObjects();
+    using recoveredAuthenticated = await publicApi.authenticate(account.token);
+
+    await expect(recoveredAuthenticated.uninstallUserPlugin({
+      pluginId: "test.notes",
+      expectedInstallationId: installed.installationId,
+    })).resolves.toEqual({
+      ok: true,
+      installationId: installed.installationId,
+      retainedState: false,
+    });
+    await expect(recoveredAuthenticated.uninstallUserPlugin({
+      pluginId: "test.notes",
+      expectedInstallationId: installed.installationId,
+    })).resolves.toEqual({
+      ok: true,
+      installationId: installed.installationId,
+      retainedState: false,
+    });
+    await expect(recoveredAuthenticated.listDetachedUserPluginStates()).resolves.toEqual([]);
+
+    const reinstalled = await recoveredAuthenticated.installUserPlugin({
+      pluginId: "test.notes",
+      packageVersion: "1.2.3",
+      approvedCapabilities: ["ui.panel", "agent.catalog.read"],
+    });
+    if (!reinstalled.ok) throw new Error("Expected replacement installation to succeed.");
+    expect(reinstalled.installationId).not.toBe(installed.installationId);
+    await expect(recoveredAuthenticated.uninstallUserPlugin({
+      pluginId: "test.notes",
+      expectedInstallationId: "unrelated-stale-installation",
+    })).resolves.toEqual({ok: false, error: "INSTALLATION_CHANGED"});
+    await expect(recoveredAuthenticated.uninstallUserPlugin({
+      pluginId: "test.notes",
+      expectedInstallationId: installed.installationId,
+    })).resolves.toEqual({
+      ok: true,
+      installationId: installed.installationId,
+      retainedState: false,
+    });
+    const currentOwner = exports.UserDurableObject.getByName(account.username);
+    await expect(currentOwner.listUserPluginInstallations()).resolves.toMatchObject([{
+      installationId: reinstalled.installationId,
+    }]);
+
+    await abortAllDurableObjects();
+    const owner = exports.UserDurableObject.getByName(account.username);
+    await expect(owner.readUserPluginInstallationsSnapshotForRuntimeHost()).resolves.toMatchObject([{
+      installationId: reinstalled.installationId,
+    }]);
+    expect((await owner.listUserPluginAuditEvents())
+      .filter(event => event.action === "PLUGIN_UNINSTALLED")).toHaveLength(1);
+  });
 });

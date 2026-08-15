@@ -1,7 +1,7 @@
 import { RpcStub, RpcTarget, newWorkersRpcResponse } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import type { JWTPayload } from "jose";
-import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult, type MyBugReportsResult, type InstallUserPluginRequest, type InstallUserPluginResult } from '@gadgets/workshop-shared/api';
+import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult, type MyBugReportsResult, type InstallUserPluginRequest, type InstallUserPluginResult, type UninstallUserPluginRequest, type UninstallUserPluginResult, type DetachedUserPluginStateSummary } from '@gadgets/workshop-shared/api';
 import { submitBugReportFlow, refreshBugReportStatuses, bugReportIssueUrl,
          BUG_REPORT_STATUS_CACHE_MS } from "./bug-report.js";
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
@@ -25,6 +25,7 @@ import { createSkillDefinition } from "./agent-definition";
 import { OverseerDurableObject, GatekeeperLoopback, CodeModeTailLoopback, AgentSpawnerGatekeeper, GatekeeperHookLoopback, GadgetTailLoopback, AgentSelfLoopback, TransientStubLoopback } from "./overseer";
 import {
   PluginRuntimeLoopback,
+  PluginStateReadCapability,
   PluginWorkspaceMetadataCapability,
 } from "./plugin-runtime-loopback.js";
 import { ExternalMessageGateway } from "./external-message-gateway";
@@ -38,6 +39,7 @@ import { createWorkshopLogger } from "./observability";
 import type { PluginManifestResolver } from "./plugin-manifest-registry.js";
 import { resolveApprovedPluginManifest } from "./plugin-installation.js";
 import { bundledPluginManifestResolver } from "./bundled-plugin-manifests.js";
+import { PluginStateDurableObject } from "./plugin-state.js";
 
 const logger = createWorkshopLogger("workshop.server");
 
@@ -68,7 +70,10 @@ export { OverseerDurableObject, GatekeeperLoopback, GatekeeperHookLoopback,
     AgentSelfLoopback, TransientStubLoopback };
 
 // Re-export the installation-scoped Dynamic Worker authority loopback.
-export { PluginRuntimeLoopback, PluginWorkspaceMetadataCapability };
+export { PluginRuntimeLoopback, PluginStateReadCapability, PluginWorkspaceMetadataCapability };
+
+// Re-export generic installation state reached only through host-owned capability facades.
+export { PluginStateDurableObject };
 
 // Re-export service-binding entrypoint for external channel integrations.
 export { ExternalMessageGateway };
@@ -144,6 +149,24 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       throw new Error("Verified plugin manifest was rejected by UserDurableObject.");
     }
     return {ok: true, installationId: result.installationId};
+  }
+  async uninstallUserPlugin(
+      request: UninstallUserPluginRequest): Promise<UninstallUserPluginResult> {
+    const begun = await this.user.beginUserPluginUninstall(
+      request.pluginId,
+      request.expectedInstallationId,
+    );
+    if (!begun.ok) return begun;
+    return this.user.finalizeUserPluginUninstall(begun.installationId);
+  }
+  async listDetachedUserPluginStates(): Promise<DetachedUserPluginStateSummary[]> {
+    const records = await this.user.listDetachedUserPluginStatesForHost();
+    return records.map(record => ({
+      installationId: record.installationId,
+      pluginId: record.pluginId,
+      packageVersion: record.packageVersion,
+      detachedAt: record.detachedAt,
+    }));
   }
   setOwnDisplayName(name: string): Promise<void> {
     return this.user.setOwnDisplayName(name);

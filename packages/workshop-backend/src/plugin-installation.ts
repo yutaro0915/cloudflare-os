@@ -57,6 +57,14 @@ export interface PluginRuntimeCapabilityClaim {
   phase: "staged" | "active";
 }
 
+/** Host-only active lifecycle query executed before any untrusted plugin invocation. */
+export interface PluginRuntimeLifecycleClaim {
+  scope: "deployment" | "workspace" | "user";
+  targetId: string;
+  installationId: string;
+  pluginId: string;
+}
+
 /** Host-only staged candidate query derived from an exact local gate snapshot. */
 export interface PluginRuntimeCandidateClaim {
   scope: "deployment" | "workspace" | "user";
@@ -118,6 +126,16 @@ export function isPluginRuntimeCapabilityAuthorized(
     (claim.phase === "active" || installation.manifestDigest === claim.manifestDigest);
 }
 
+/** Checks the stable active lifecycle while deliberately allowing a safely retained old digest. */
+export function isPluginRuntimeLifecycleAuthorized(
+    installation: PluginInstallationInput & {scope: string; targetId: string},
+    claim: PluginRuntimeLifecycleClaim): boolean {
+  return installation.scope === claim.scope &&
+    installation.targetId === claim.targetId &&
+    installation.installationId === claim.installationId &&
+    installation.pluginId === claim.pluginId && installation.enabled;
+}
+
 /** Desired state persisted by one UserDurableObject. */
 export interface UserPluginInstallation extends PluginInstallationInput {
   /** Schema version for the stored installation record. */
@@ -131,6 +149,27 @@ export interface UserPluginInstallation extends PluginInstallationInput {
 
   /** Opaque host-managed reference to optional plugin-owned persistent state. */
   stateRef?: string;
+}
+
+/** Persistent linearization marker that permanently revokes one installation lifecycle. */
+export interface UserPluginInstallationRevocation {
+  schemaVersion: 1;
+  installationId: string;
+  pluginId: string;
+  stateRef?: string;
+  startedAt: number;
+  finalizedAt?: number;
+}
+
+/** Host-only pointer to state retained after its active installation was removed. */
+export interface DetachedUserPluginStateRecord {
+  schemaVersion: 1;
+  installationId: string;
+  pluginId: string;
+  packageVersion: string;
+  manifestDigest: string;
+  stateRef: string;
+  detachedAt: number;
 }
 
 const MAX_PLUGIN_CONFIGURATION_DEPTH = 32;
@@ -183,6 +222,14 @@ function isPluginConfiguration(
   } finally {
     ancestors.delete(value);
   }
+}
+
+/** Validates and owns one JSON value received across a plugin state RPC boundary. */
+export function decodePluginConfigurationValue(value: unknown): PluginConfigurationValue {
+  if (!isPluginConfiguration(value, {remaining: MAX_PLUGIN_CONFIGURATION_VALUES})) {
+    throw new TypeError("Invalid plugin configuration value.");
+  }
+  return structuredClone(value);
 }
 
 function readInstallationBase(value: Record<string, unknown>): PluginInstallationInput | null {
@@ -498,7 +545,7 @@ export interface UserPluginAuditEvent {
   sequence: number;
 
   /** Mutation recorded by this event. */
-  action: "PLUGIN_DESIRED_STATE_PUT";
+  action: "PLUGIN_DESIRED_STATE_PUT" | "PLUGIN_UNINSTALLED";
 
   /** UserDurableObject ID stamped as the authenticated actor. */
   actorUserId: string;
@@ -543,7 +590,26 @@ export type PutUserPluginInstallationResult = {
   ok: false;
 
   /** Stable machine-readable reason for the rejection. */
-  error: "INVALID_MANIFEST_DIGEST";
+  error: "INVALID_MANIFEST_DIGEST" | "UNINSTALL_IN_PROGRESS";
+};
+
+/** Transactional first phase of a user-scoped uninstall. */
+export type BeginUserPluginUninstallResult = {
+  ok: true;
+  installationId: string;
+} | {
+  ok: false;
+  error: "PLUGIN_NOT_INSTALLED" | "INSTALLATION_CHANGED" | "UNINSTALL_IN_PROGRESS";
+};
+
+/** Idempotent desired-state removal and optional state detach result. */
+export type FinalizeUserPluginUninstallResult = {
+  ok: true;
+  installationId: string;
+  retainedState: boolean;
+} | {
+  ok: false;
+  error: "PLUGIN_NOT_INSTALLED" | "INSTALLATION_CHANGED" | "UNINSTALL_IN_PROGRESS";
 };
 
 /** Returns whether a manifest digest is in canonical content-addressed form. */

@@ -137,4 +137,102 @@ describe("user plugin installations", () => {
       {installationId: first.installationId, packageVersion: second.packageVersion},
     ]);
   });
+
+  it("revokes before detach and preserves installation state across reconstruction", async () => {
+    let owner = exports.UserDurableObject.getByName("plugin-uninstall-owner");
+    const input: PluginInstallationInput = {
+      installationId: "installation-stateful-v1",
+      pluginId: "example.stateful",
+      packageVersion: "1.0.0",
+      manifestDigest: `sha256:${"c".repeat(64)}`,
+      enabled: true,
+      grantedCapabilities: ["plugin.state.read"],
+      config: null,
+    };
+    await expect(owner.putUserPluginInstallation(input)).resolves.toEqual({
+      ok: true,
+      installationId: input.installationId,
+    });
+    const [installed] = await owner.listUserPluginInstallations();
+    if (installed?.stateRef === undefined) throw new Error("Expected host-managed stateRef.");
+    const state = exports.PluginStateDurableObject.get(
+      exports.PluginStateDurableObject.idFromString(installed.stateRef),
+    );
+    const stateOwner = {
+      scope: "user" as const,
+      targetId: owner.id.toString(),
+      pluginId: input.pluginId,
+      installationId: input.installationId,
+    };
+    await state.putForHost(stateOwner, "marker", {present: true});
+    await expect(state.read({...stateOwner, targetId: "forged-user"}, "marker"))
+      .rejects.toThrow("Plugin state owner mismatch");
+
+    await expect(owner.beginUserPluginUninstall(
+      input.pluginId,
+      input.installationId,
+    )).resolves.toEqual({
+      ok: true,
+      installationId: input.installationId,
+    });
+    await expect(owner.readUserPluginInstallationsSnapshotForRuntimeHost()).resolves.toEqual([]);
+    await expect(owner.authorizePluginCapabilityForRuntimeHost({
+      scope: "user",
+      targetId: owner.id.toString(),
+      installationId: input.installationId,
+      pluginId: input.pluginId,
+      manifestDigest: input.manifestDigest,
+      capability: "plugin.state.read",
+      phase: "active",
+    })).resolves.toBe(false);
+    await expect(owner.finalizeUserPluginUninstall(input.installationId)).resolves.toEqual({
+      ok: true,
+      installationId: input.installationId,
+      retainedState: true,
+    });
+
+    await abortAllDurableObjects();
+    owner = exports.UserDurableObject.getByName("plugin-uninstall-owner");
+    await expect(owner.listUserPluginInstallations()).resolves.toEqual([]);
+    await expect(owner.listDetachedUserPluginStatesForHost()).resolves.toMatchObject([{
+      installationId: input.installationId,
+      pluginId: input.pluginId,
+      stateRef: installed.stateRef,
+    }]);
+    const reconstructedState = exports.PluginStateDurableObject.get(
+      exports.PluginStateDurableObject.idFromString(installed.stateRef),
+    );
+    await expect(reconstructedState.read(stateOwner, "marker"))
+      .resolves.toEqual({present: true});
+    const uninstallEvents = (await owner.listUserPluginAuditEvents())
+      .filter(event => event.action === "PLUGIN_UNINSTALLED");
+    expect(uninstallEvents).toHaveLength(1);
+    await expect(owner.finalizeUserPluginUninstall(input.installationId)).resolves.toEqual({
+      ok: true,
+      installationId: input.installationId,
+      retainedState: true,
+    });
+    expect((await owner.listUserPluginAuditEvents())
+      .filter(event => event.action === "PLUGIN_UNINSTALLED")).toHaveLength(1);
+
+    const replacement: PluginInstallationInput = {
+      ...input,
+      installationId: "installation-stateful-v2",
+    };
+    await expect(owner.putUserPluginInstallation(replacement)).resolves.toEqual({
+      ok: true,
+      installationId: replacement.installationId,
+    });
+    const [reinstalled] = await owner.listUserPluginInstallations();
+    expect(reinstalled?.installationId).toBe(replacement.installationId);
+    expect(reinstalled?.stateRef).not.toBe(installed.stateRef);
+    await expect(owner.finalizeUserPluginUninstall(input.installationId)).resolves.toEqual({
+      ok: true,
+      installationId: input.installationId,
+      retainedState: true,
+    });
+    await expect(owner.listUserPluginInstallations()).resolves.toMatchObject([{
+      installationId: replacement.installationId,
+    }]);
+  });
 });

@@ -318,6 +318,48 @@ export type InstallUserPluginRequest = InstallPluginRequest;
 /** User-scoped install result returned by `AuthenticatedApi.installUserPlugin()`. */
 export type InstallUserPluginResult = InstallPluginResult;
 
+/** User-scoped uninstall request accepted without any caller-supplied owner identity. */
+export interface UninstallUserPluginRequest {
+  /** Stable package identifier currently installed for the authenticated user. */
+  pluginId: string;
+
+  /** Exact installation lifecycle observed by the user before requesting uninstall. */
+  expectedInstallationId: string;
+}
+
+/** Result of revoking and detaching one user-scoped installation lifecycle. */
+export type UninstallUserPluginResult = {
+  /** The lifecycle was revoked and removed from desired state. */
+  ok: true;
+
+  /** Host-issued lifecycle identifier that was revoked. */
+  installationId: string;
+
+  /** Whether plugin-owned state was retained as a detached record. */
+  retainedState: boolean;
+} | {
+  /** No mutation was applied. */
+  ok: false;
+
+  /** Stable expected failure visible to the authenticated user. */
+  error: "PLUGIN_NOT_INSTALLED" | "INSTALLATION_CHANGED" | "UNINSTALL_IN_PROGRESS";
+};
+
+/** Safe browser summary of detached plugin state; the opaque state reference is never exposed. */
+export interface DetachedUserPluginStateSummary {
+  /** Revoked installation lifecycle that owns the retained state. */
+  installationId: string;
+
+  /** Stable package identifier of the detached installation. */
+  pluginId: string;
+
+  /** Exact package version recorded when detach completed. */
+  packageVersion: string;
+
+  /** Host timestamp in milliseconds since the Unix epoch. */
+  detachedAt: number;
+}
+
 /** Workspace-scoped install result returned by `Overseer.installWorkspacePlugin()`. */
 export type InstallWorkspacePluginResult = InstallPluginResult | {
   /** The build collaborator request was rejected without changing desired state. */
@@ -334,6 +376,12 @@ export interface AuthenticatedApi extends RpcTarget {
 
   /** Install one exact user-scoped plugin after manifest and approval verification. */
   installUserPlugin(request: InstallUserPluginRequest): Promise<InstallUserPluginResult>;
+
+  /** Revokes one user lifecycle before removing its desired-state record. */
+  uninstallUserPlugin(request: UninstallUserPluginRequest): Promise<UninstallUserPluginResult>;
+
+  /** Lists retained detached state without exposing state references or Durable Object stubs. */
+  listDetachedUserPluginStates(): Promise<DetachedUserPluginStateSummary[]>;
 
   // Set the user's own display name, seen in chats, etc.
   setOwnDisplayName(name: string): Promise<void>;

@@ -21,9 +21,15 @@ import {
   isPluginRuntimeCapabilityAuthorized,
   isPluginRuntimeCandidateCurrent,
   type PluginRuntimeCandidateClaim,
+  type PluginRuntimeLifecycleClaim,
+  isPluginRuntimeLifecycleAuthorized,
   type UserPluginAuditEvent,
   type UserPluginInstallation,
   type PluginInstallationInput,
+  type UserPluginInstallationRevocation,
+  type DetachedUserPluginStateRecord,
+  type BeginUserPluginUninstallResult,
+  type FinalizeUserPluginUninstallResult,
 } from "./plugin-installation.js";
 
 const logger = createWorkshopLogger("workshop.user");
@@ -189,6 +195,12 @@ function makeUserStorage(storage: DurableObjectStorage) {
       }),
       pluginAuditEvents: collection<UserPluginAuditEvent>()({
         primaryKey: "sequence",
+      }),
+      pluginRevocations: collection<UserPluginInstallationRevocation>()({
+        primaryKey: "installationId",
+      }),
+      detachedPluginStates: collection<DetachedUserPluginStateRecord>()({
+        primaryKey: "installationId",
       }),
       gadgets: collection<GadgetRecord>()({
         primaryKey: "id"
@@ -657,7 +669,8 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
 
   /** Returns an untyped snapshot for a caller that must revalidate this cross-DO system boundary. */
   async readUserPluginInstallationsSnapshotForRuntimeHost(): Promise<unknown> {
-    return Array.from(this.storage.pluginInstallations.list());
+    return Array.from(this.storage.pluginInstallations.list()).filter(installation =>
+      this.storage.pluginRevocations.get(installation.installationId) === undefined);
   }
 
   /** Checks one exact runtime capability against this user's current desired installation. */
@@ -666,6 +679,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     if (claim.scope !== "user" || claim.targetId !== this.ctx.id.toString()) return false;
     const installation = this.storage.pluginInstallations.get(claim.pluginId);
     return installation !== undefined &&
+      this.storage.pluginRevocations.get(installation.installationId) === undefined &&
       isPluginRuntimeCapabilityAuthorized(installation, claim);
   }
 
@@ -674,7 +688,19 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       claim: PluginRuntimeCandidateClaim): Promise<boolean> {
     if (claim.scope !== "user" || claim.targetId !== this.ctx.id.toString()) return false;
     const installation = this.storage.pluginInstallations.get(claim.pluginId);
-    return installation !== undefined && isPluginRuntimeCandidateCurrent(installation, claim);
+    return installation !== undefined &&
+      this.storage.pluginRevocations.get(installation.installationId) === undefined &&
+      isPluginRuntimeCandidateCurrent(installation, claim);
+  }
+
+  /** Checks the current non-revoked lifecycle before any untrusted active invocation. */
+  async authorizePluginLifecycleForRuntimeHost(
+      claim: PluginRuntimeLifecycleClaim): Promise<boolean> {
+    if (claim.scope !== "user" || claim.targetId !== this.ctx.id.toString()) return false;
+    const installation = this.storage.pluginInstallations.get(claim.pluginId);
+    return installation !== undefined &&
+      this.storage.pluginRevocations.get(installation.installationId) === undefined &&
+      isPluginRuntimeLifecycleAuthorized(installation, claim);
   }
 
   /** Lists host-owned plugin audit events in append order. */
@@ -691,9 +717,25 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     let installationId = "";
     this.ctx.storage.transactionSync(() => {
       const existing = this.storage.pluginInstallations.get(input.pluginId);
+      if (
+        existing !== undefined &&
+        this.storage.pluginRevocations.get(existing.installationId) !== undefined
+      ) return;
+      const acceptedInstallationId = existing?.installationId ?? input.installationId;
+      const stateRef = existing?.stateRef ?? (
+        input.grantedCapabilities.includes("plugin.state.read")
+          ? this.ctx.exports.PluginStateDurableObject.getByName(JSON.stringify([
+            "plugin-state-v1",
+            "user",
+            this.ctx.id.toString(),
+            input.pluginId,
+            acceptedInstallationId,
+          ])).id.toString()
+          : undefined
+      );
       const installation: UserPluginInstallation = {
         schemaVersion: 1,
-        installationId: existing?.installationId ?? input.installationId,
+        installationId: acceptedInstallationId,
         scope: "user",
         targetId: this.ctx.id.toString(),
         pluginId: input.pluginId,
@@ -702,7 +744,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
         enabled: input.enabled,
         grantedCapabilities: [...input.grantedCapabilities],
         config: structuredClone(input.config),
-        ...(existing?.stateRef === undefined ? {} : {stateRef: existing.stateRef}),
+        ...(stateRef === undefined ? {} : {stateRef}),
       };
       const sequence = this.storage.nextPluginAuditSequence.get();
       const event: UserPluginAuditEvent = {
@@ -725,7 +767,112 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       this.storage.nextPluginAuditSequence.put(sequence + 1);
       installationId = installation.installationId;
     });
+    if (installationId === "") return {ok: false, error: "UNINSTALL_IN_PROGRESS"};
     return {ok: true, installationId};
+  }
+
+  /** Persists the permanent revocation marker that linearizes a user uninstall. */
+  beginUserPluginUninstall(
+      pluginId: string,
+      expectedInstallationId: string): BeginUserPluginUninstallResult {
+    let result: BeginUserPluginUninstallResult = {ok: false, error: "PLUGIN_NOT_INSTALLED"};
+    this.ctx.storage.transactionSync(() => {
+      const exactRevocation = this.storage.pluginRevocations.get(expectedInstallationId);
+      if (exactRevocation?.pluginId === pluginId) {
+        result = {ok: true, installationId: expectedInstallationId};
+        return;
+      }
+      const installation = this.storage.pluginInstallations.get(pluginId);
+      if (installation === undefined) {
+        return;
+      }
+      if (installation.installationId !== expectedInstallationId) {
+        result = {ok: false, error: "INSTALLATION_CHANGED"};
+        return;
+      }
+      const existing = this.storage.pluginRevocations.get(installation.installationId);
+      if (existing !== undefined) {
+        result = {ok: true, installationId: existing.installationId};
+        return;
+      }
+      this.storage.pluginRevocations.put({
+        schemaVersion: 1,
+        installationId: installation.installationId,
+        pluginId: installation.pluginId,
+        ...(installation.stateRef === undefined ? {} : {stateRef: installation.stateRef}),
+        startedAt: Date.now(),
+      });
+      result = {ok: true, installationId: installation.installationId};
+    });
+    return result;
+  }
+
+  /** Removes revoked desired state and detaches its state pointer exactly once. */
+  finalizeUserPluginUninstall(
+      installationId: string): FinalizeUserPluginUninstallResult {
+    let result: FinalizeUserPluginUninstallResult = {
+      ok: false,
+      error: "PLUGIN_NOT_INSTALLED",
+    };
+    this.ctx.storage.transactionSync(() => {
+      const revocation = this.storage.pluginRevocations.get(installationId);
+      if (revocation === undefined) return;
+      if (revocation.finalizedAt !== undefined) {
+        result = {
+          ok: true,
+          installationId,
+          retainedState: this.storage.detachedPluginStates.get(installationId) !== undefined,
+        };
+        return;
+      }
+      const installation = this.storage.pluginInstallations.get(revocation.pluginId);
+      if (installation?.installationId !== installationId) {
+        result = {ok: false, error: "UNINSTALL_IN_PROGRESS"};
+        return;
+      }
+      const detachedAt = Date.now();
+      if (installation.stateRef !== undefined) {
+        this.storage.detachedPluginStates.put({
+          schemaVersion: 1,
+          installationId,
+          pluginId: installation.pluginId,
+          packageVersion: installation.packageVersion,
+          manifestDigest: installation.manifestDigest,
+          stateRef: installation.stateRef,
+          detachedAt,
+        });
+      }
+      const sequence = this.storage.nextPluginAuditSequence.get();
+      this.storage.pluginAuditEvents.put({
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_UNINSTALLED",
+        actorUserId: this.ctx.id.toString(),
+        scope: "user",
+        targetId: this.ctx.id.toString(),
+        installationId,
+        pluginId: installation.pluginId,
+        packageVersion: installation.packageVersion,
+        manifestDigest: installation.manifestDigest,
+        enabled: false,
+        grantedCapabilities: [],
+        recordedAt: detachedAt,
+      });
+      this.storage.pluginInstallations.delete(installation.pluginId);
+      this.storage.pluginRevocations.put({...revocation, finalizedAt: detachedAt});
+      this.storage.nextPluginAuditSequence.put(sequence + 1);
+      result = {
+        ok: true,
+        installationId,
+        retainedState: installation.stateRef !== undefined,
+      };
+    });
+    return result;
+  }
+
+  /** Lists host-only detached records; browser projection must omit stateRef. */
+  listDetachedUserPluginStatesForHost(): DetachedUserPluginStateRecord[] {
+    return Array.from(this.storage.detachedPluginStates.list());
   }
 
   async listSkillDefinitions(): Promise<SkillDefinition[]> {

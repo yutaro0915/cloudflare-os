@@ -271,7 +271,7 @@ describe("Dynamic Worker plugin activator", () => {
     const base = plan();
     const expected = await pluginActivationKey(REALM, base, ATTEMPT);
     expect(expected).toBe(
-      "plugin-worker:v1:eb8a94221d1fc3bfa2a8a0b916288202d7814fe0be916967913fd5f9873e30e5",
+      "plugin-worker:v1:d8ca2c118e057d1273a064129469d576a7b8328ccb43b066389e4989d7b5e3e7",
     );
     await expect(pluginActivationKey(structuredClone(REALM), structuredClone(base), ATTEMPT))
       .resolves.toBe(expected);

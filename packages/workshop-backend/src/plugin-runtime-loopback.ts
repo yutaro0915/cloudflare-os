@@ -2,6 +2,10 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import type { CollaboratorRole } from "@gadgets/workshop-shared/api";
 import type { PluginRuntimeRealmIdentity } from "./dynamic-worker-plugin-activator.js";
 import type { PluginWorkspaceMetadata } from "./plugin-runtime-capability-env.js";
+import {
+  decodePluginConfigurationValue,
+  type PluginConfigurationValue,
+} from "./plugin-installation.js";
 
 type PluginRuntimeClaimPhase = "staged" | "active" | "staged-or-active";
 
@@ -97,6 +101,43 @@ export class PluginWorkspaceMetadataCapability
   }
 }
 
+/** Installation-scoped state reader exposed only when `plugin.state.read` is granted. */
+export class PluginStateReadCapability
+    extends WorkerEntrypoint<Cloudflare.Env, PluginRuntimeLoopbackProps> {
+  /** Reads one bounded JSON value through the owner and exact active gate on every call. */
+  async read(key: string): Promise<PluginConfigurationValue | null> {
+    const identity: PluginRuntimeRealmIdentity = {
+      overseerId: this.ctx.props.overseerId,
+      userId: this.ctx.props.userId,
+      role: this.ctx.props.role,
+      generation: this.ctx.props.generation,
+    };
+    const overseers = this.ctx.exports.OverseerDurableObject;
+    const overseer = overseers.get(overseers.idFromString(identity.overseerId));
+    let value: PluginConfigurationValue | null | undefined;
+    await assertPluginRuntimeLoopbackClaim(this.ctx.props, "active", {
+      isManifestDenied: manifestDigest => this.ctx.exports.AdminSettings.getByName("")
+        .isPluginManifestDeniedForRuntimeHost(manifestDigest),
+      revokeDeniedClaim: props => overseer.revokeDeniedPluginRuntimeForHost(
+        identity,
+        props.pluginId,
+        props.activationKey,
+        props.manifestDigest,
+      ),
+      assertGate: async props => {
+        value = decodePluginConfigurationValue(await overseer.readPluginStateForRuntimeHost(
+          identity,
+          props.pluginId,
+          props.activationKey,
+          props.manifestDigest,
+          key,
+        ));
+      },
+    });
+    return value ?? null;
+  }
+}
+
 /** Stable loopback binding that re-enters the owning Overseer for every authority check. */
 export class PluginRuntimeLoopback
     extends WorkerEntrypoint<Cloudflare.Env, PluginRuntimeLoopbackProps> {
@@ -140,12 +181,11 @@ export class PluginRuntimeLoopback
             props.manifestDigest,
           );
         }
-        return overseer.assertPluginRuntimeGateForHost(
+        return overseer.authorizeActivePluginRuntimeForHost(
           identity,
           props.pluginId,
           props.activationKey,
           props.manifestDigest,
-          claimPhase,
         );
       },
     });

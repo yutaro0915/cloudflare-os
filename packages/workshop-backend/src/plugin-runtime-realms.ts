@@ -4,6 +4,7 @@ import type {
 } from "./dynamic-worker-plugin-activator.js";
 import type {
   PluginCapabilityAuthority,
+  PluginActiveInstallationAuthority,
   PluginRuntimeGateClaim,
   PluginStagedInstallationAuthority,
 } from "./plugin-capability-gate.js";
@@ -43,6 +44,13 @@ export interface PluginRuntimeRealm {
     manifestDigest: string,
     capability: string,
   ): PluginCapabilityAuthority | undefined;
+
+  /** Returns one exact active installation only when gate and reconciler tokens agree. */
+  activeInstallationAuthority(
+    pluginId: string,
+    activationKey: string,
+    manifestDigest: string,
+  ): PluginActiveInstallationAuthority | undefined;
 
   /** Returns one exact staged installation snapshot for final owner authorization. */
   stagedInstallationAuthority(
@@ -179,6 +187,22 @@ export class PluginRuntimeRealms {
     }
     return entry.realm.activeCapabilityAuthority(
       pluginId, activationKey, manifestDigest, capability,
+    );
+  }
+
+  /** Returns an active installation only for the current realm generation and exact token. */
+  activeInstallationAuthority(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): PluginActiveInstallationAuthority | undefined {
+    this.#assertWorkspace(identity);
+    const entry = this.#entries.get(this.#key(identity));
+    if (entry === undefined || entry.identity.generation !== identity.generation) {
+      throw new Error("Plugin runtime realm is unavailable.");
+    }
+    return entry.realm.activeInstallationAuthority(
+      pluginId, activationKey, manifestDigest,
     );
   }
 
