@@ -116,6 +116,9 @@ async function makeTargetOverseer(gadgetId?: number) {
       markOutputsDirty: () => {},
       joinPresence: () => () => {},
       joinOutputsFanout: () => () => {},
+      pluginRuntimeRealms: {
+        acquire: async () => ({release: () => {}}),
+      },
       users: {
         idFromString: (id: string) => id,
         get: () => ({

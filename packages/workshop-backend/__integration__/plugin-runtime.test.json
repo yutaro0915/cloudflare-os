@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 3,
+  "pluginId": "test.runtime",
+  "packageVersion": "1.0.0",
+  "requestedCapabilities": [],
+  "dependencies": [],
+  "runtime": {
+    "kind": "dynamic-worker",
+    "codeArtifactDigest": "sha256:b9bb5493c1637254622dc94ba6397b3889dff9261ed4e8d0dde98d755ba522a7"
+  }
+}

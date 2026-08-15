@@ -13,6 +13,7 @@ const LOCATOR: PluginRuntimeRealmLocator = {
   userId: "user-a",
   role: "build",
 };
+const DIGEST = `sha256:${"a".repeat(64)}`;
 
 class FakeRealm implements PluginRuntimeRealm {
   refreshes = 0;
@@ -22,6 +23,7 @@ class FakeRealm implements PluginRuntimeRealm {
   refreshError?: Error;
   revokeError?: Error;
   closePromise = Promise.resolve();
+  denyMatches = true;
 
   async refresh(): Promise<void> {
     this.refreshes += 1;
@@ -39,8 +41,26 @@ class FakeRealm implements PluginRuntimeRealm {
     this.closeResolved = true;
   }
 
-  assertGate(_pluginId: string, _activationKey: string, _phase: "staged" | "active"): void {
+  assertGate(
+      _pluginId: string,
+      _activationKey: string,
+      _manifestDigest: string,
+      _phase: "staged" | "active"): void {
     if (!this.active) throw new Error("Plugin runtime gate denied.");
+  }
+
+  assertPluginActive(_pluginId: string): void {
+    if (!this.active) throw new Error("Plugin runtime plugin is inactive.");
+  }
+
+  activeClaim(): {activationKey: string; manifestDigest: string} | undefined {
+    return this.active ? {activationKey: "activation-v1", manifestDigest: DIGEST} : undefined;
+  }
+
+  denyPlugin(): boolean {
+    if (!this.denyMatches) return false;
+    this.active = false;
+    return true;
   }
 }
 
@@ -67,12 +87,12 @@ describe("plugin runtime realms", () => {
 
     first.release();
     expect(created[0]?.active).toBe(true);
-    realms.assertGate(identities[0]!, "example.runtime", "activation-v1", "active");
+    realms.assertGate(identities[0]!, "example.runtime", "activation-v1", DIGEST, "active");
 
     second.release();
     expect(created[0]?.active).toBe(false);
     expect(() => realms.assertGate(
-      identities[0]!, "example.runtime", "activation-v1", "active",
+      identities[0]!, "example.runtime", "activation-v1", DIGEST, "active",
     )).toThrow("Plugin runtime realm is unavailable");
     expect(tracked).toHaveLength(1);
     await tracked[0];
@@ -108,11 +128,11 @@ describe("plugin runtime realms", () => {
     expect(created[1]?.active).toBe(true);
     expect(identities[1]?.generation).not.toBe(identities[0]?.generation);
     expect(() => realms.assertGate(
-      identities[0]!, "example.runtime", "activation-v1", "active",
+      identities[0]!, "example.runtime", "activation-v1", DIGEST, "active",
     )).toThrow("Plugin runtime realm is unavailable");
     finishOldClose?.();
     await Promise.resolve();
-    realms.assertGate(identities[1]!, "example.runtime", "activation-v1", "active");
+    realms.assertGate(identities[1]!, "example.runtime", "activation-v1", DIGEST, "active");
     newSession.release();
   });
 
@@ -136,7 +156,7 @@ describe("plugin runtime realms", () => {
 
     expect(realm.active).toBe(true);
     expect(failures).toEqual([realm.refreshError]);
-    realms.assertGate(identity!, "example.runtime", "activation-v1", "active");
+    realms.assertGate(identity!, "example.runtime", "activation-v1", DIGEST, "active");
     first.release();
     second.release();
   });
@@ -185,7 +205,7 @@ describe("plugin runtime realms", () => {
 
     expect(attempts).toBe(2);
     expect(failures).toHaveLength(1);
-    realms.assertGate(identity!, "example.runtime", "activation-v1", "active");
+    realms.assertGate(identity!, "example.runtime", "activation-v1", DIGEST, "active");
     recovered.release();
   });
 
@@ -203,13 +223,50 @@ describe("plugin runtime realms", () => {
 
     expect(() => realms.assertGate(
       {...identity!, overseerId: "workspace-b"},
-      "example.runtime", "activation-v1", "active",
+      "example.runtime", "activation-v1", DIGEST, "active",
     )).toThrow("Plugin runtime realm does not belong to this workspace");
     expect(() => realms.assertGate(
       {...identity!, role: "use"},
-      "example.runtime", "activation-v1", "active",
+      "example.runtime", "activation-v1", DIGEST, "active",
     )).toThrow("Plugin runtime realm is unavailable");
     session.release();
+  });
+
+  it("revokes an exact denied claim synchronously and tracks refresh without awaiting it", async () => {
+    let identity: PluginRuntimeRealmIdentity | undefined;
+    let releaseRefresh: (() => void) | undefined;
+    const tracked: Promise<void>[] = [];
+    const realm = new FakeRealm();
+    const realms = new PluginRuntimeRealms(
+      "workspace-a",
+      createdIdentity => {
+        identity = createdIdentity;
+        return realm;
+      },
+      cleanup => tracked.push(cleanup),
+    );
+    const session = await realms.acquire(LOCATOR);
+    let blockNextRefresh = true;
+    realm.refresh = async () => {
+      realm.refreshes += 1;
+      if (blockNextRefresh) {
+        blockNextRefresh = false;
+        await new Promise<void>(resolve => { releaseRefresh = resolve; });
+      }
+    };
+
+    const pendingAcquire = realms.acquire(LOCATOR);
+    await Promise.resolve();
+    realms.denyPlugin(identity!, "example.runtime", "activation-v1", DIGEST);
+
+    expect(realm.active).toBe(false);
+    expect(tracked).toHaveLength(1);
+    releaseRefresh?.();
+    const second = await pendingAcquire;
+    await tracked[0];
+    expect(realm.refreshes).toBe(3);
+    session.release();
+    second.release();
   });
 
   it("tracks async cleanup even when synchronous revocation and the tracker fail", async () => {

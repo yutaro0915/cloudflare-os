@@ -8,6 +8,9 @@ const EXPECTED_OPEN_ERROR_CODES = new Set([
 ]);
 const EXPECTED_RPC_ERROR_MESSAGES = new Set([
   "Unauthorized: this collaborator only has permission to use the gadget's UI.",
+  "Plugin runtime realm is unavailable.",
+  "Plugin runtime plugin is inactive.",
+  "Plugin manifest is denied.",
 ]);
 
 export default defineConfig({
@@ -21,7 +24,12 @@ export default defineConfig({
       remoteBindings: false,
       miniflare: {
         bindings: {
-          ADMINS: ["deploymentpluginadmin", "deploymentpluginrejectadmin"],
+          ADMINS: [
+            "deploymentpluginadmin",
+            "deploymentpluginrejectadmin",
+            "deploymentplugindenylistadmin",
+            "deploymentplugindenyruntimeadmin",
+          ],
         },
       },
       wrangler: {

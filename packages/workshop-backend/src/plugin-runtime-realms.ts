@@ -2,6 +2,7 @@ import type {
   PluginRuntimeRealmIdentity,
   PluginRuntimeRealmLocator,
 } from "./dynamic-worker-plugin-activator.js";
+import type { PluginRuntimeGateClaim } from "./plugin-capability-gate.js";
 
 /** Runtime operations owned by exactly one authenticated workspace-user-role realm. */
 export interface PluginRuntimeRealm {
@@ -15,7 +16,25 @@ export interface PluginRuntimeRealm {
   close(): Promise<void>;
 
   /** Throws unless this exact staged or active gate currently belongs to the realm. */
-  assertGate(pluginId: string, activationKey: string, phase: "staged" | "active"): void;
+  assertGate(
+    pluginId: string,
+    activationKey: string,
+    manifestDigest: string,
+    phase: "staged" | "active",
+  ): void;
+
+  /** Throws unless the host selected some current-generation activation for this package. */
+  assertPluginActive(pluginId: string): void;
+
+  /** Returns one owned active claim for a trusted host loopback diagnostic. */
+  activeClaim(pluginId: string): PluginRuntimeGateClaim | undefined;
+
+  /** Immediately denies one exact claim and queues forced denylist reconciliation. */
+  denyPlugin(
+    pluginId: string,
+    activationKey: string,
+    manifestDigest: string,
+  ): boolean;
 }
 
 /** Reference-counted session ownership returned without exposing the underlying realm. */
@@ -90,13 +109,59 @@ export class PluginRuntimeRealms {
       identity: PluginRuntimeRealmIdentity,
       pluginId: string,
       activationKey: string,
+      manifestDigest: string,
       phase: "staged" | "active"): void {
     this.#assertWorkspace(identity);
     const entry = this.#entries.get(this.#key(identity));
     if (entry === undefined || entry.identity.generation !== identity.generation) {
       throw new Error("Plugin runtime realm is unavailable.");
     }
-    entry.realm.assertGate(pluginId, activationKey, phase);
+    entry.realm.assertGate(pluginId, activationKey, manifestDigest, phase);
+  }
+
+  /** Verifies host operational health without disclosing activation keys or generation nonces. */
+  assertPluginActive(identity: PluginRuntimeRealmLocator, pluginId: string): void {
+    this.#assertWorkspace(identity);
+    const entry = this.#entries.get(this.#key(identity));
+    if (entry === undefined) throw new Error("Plugin runtime realm is unavailable.");
+    entry.realm.assertPluginActive(pluginId);
+  }
+
+  /** Returns one current-generation active claim without widening browser RPC capabilities. */
+  activeClaim(
+      identity: PluginRuntimeRealmLocator,
+      pluginId: string): (PluginRuntimeRealmIdentity & PluginRuntimeGateClaim) | undefined {
+    this.#assertWorkspace(identity);
+    const entry = this.#entries.get(this.#key(identity));
+    if (entry === undefined) return undefined;
+    const claim = entry.realm.activeClaim(pluginId);
+    return claim === undefined ? undefined : {...entry.identity, ...claim};
+  }
+
+  /** Denies an exact current-generation claim and queues physical retirement in the background. */
+  denyPlugin(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): void {
+    this.#assertWorkspace(identity);
+    const key = this.#key(identity);
+    const entry = this.#entries.get(key);
+    if (entry === undefined || entry.identity.generation !== identity.generation) return;
+    if (!entry.realm.denyPlugin(pluginId, activationKey, manifestDigest)) return;
+    entry.refreshTail = entry.refreshTail.then(async () => {
+      if (this.#entries.get(key) !== entry) return;
+      try {
+        await entry.realm.refresh();
+      } catch (error) {
+        this.#report(error);
+      }
+    });
+    try {
+      this.trackCleanup(entry.refreshTail);
+    } catch (error) {
+      this.#report(error);
+    }
   }
 
   #release(key: string, entry: RealmEntry): void {

@@ -26,25 +26,47 @@ function approvalsExactlyMatch(
  */
 export async function buildRuntimePluginPlans(
     installations: readonly EffectivePluginInstallation[],
-    resolver: PluginManifestResolver): Promise<BuildRuntimePluginPlansResult> {
+    resolver: PluginManifestResolver,
+    deniedManifestDigests: readonly string[] = []): Promise<BuildRuntimePluginPlansResult> {
   const snapshot = structuredClone(installations);
+  const denied = new Set(deniedManifestDigests);
   const plans: RuntimePluginPlan[] = [];
   const preflightFailures: RuntimePluginPreflightFailure[] = [];
   for (const installation of snapshot) {
+    if (denied.has(installation.manifestDigest)) {
+      preflightFailures.push({
+        installation,
+        retention: "forbidden",
+        reason: "MANIFEST_DENYLISTED",
+      });
+      continue;
+    }
     const manifest = await resolver.resolve(installation.pluginId, installation.packageVersion);
     if (manifest === null) {
-      preflightFailures.push({installation, reason: "MANIFEST_NOT_FOUND"});
+      preflightFailures.push({
+        installation,
+        retention: "allowed",
+        reason: "MANIFEST_NOT_FOUND",
+      });
       continue;
     }
     if (
       manifest.manifestDigest !== installation.manifestDigest ||
       !approvalsExactlyMatch(manifest.requestedCapabilities, installation.grantedCapabilities)
     ) {
-      preflightFailures.push({installation, reason: "MANIFEST_INTEGRITY_MISMATCH"});
+      preflightFailures.push({
+        installation,
+        retention: "allowed",
+        reason: "MANIFEST_INTEGRITY_MISMATCH",
+      });
       continue;
     }
     if (manifest.runtime === undefined) {
-      preflightFailures.push({installation, reason: "RUNTIME_ARTIFACT_NOT_DECLARED"});
+      preflightFailures.push({
+        installation,
+        retention: "allowed",
+        reason: "RUNTIME_ARTIFACT_NOT_DECLARED",
+      });
       continue;
     }
     plans.push({

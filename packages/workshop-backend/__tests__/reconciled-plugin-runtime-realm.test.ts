@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { EffectivePluginConfigurationInput } from "../src/plugin-effective-configuration.js";
 import type {
   DeploymentPluginInstallationRecord,
   UserPluginInstallation,
@@ -18,6 +17,7 @@ import type {
   PluginWorkerStarter,
 } from "../src/dynamic-worker-plugin-activator.js";
 import { ReconciledPluginRuntimeRealm } from "../src/reconciled-plugin-runtime-realm.js";
+import type { PluginRuntimeControlSnapshot } from "../src/reconciled-plugin-runtime-realm.js";
 
 const REALM: PluginRuntimeRealmIdentity = {
   overseerId: "workspace-a",
@@ -49,13 +49,14 @@ class RecordingStarter implements PluginWorkerStarter {
 
 async function fixture(): Promise<{
   source: {
-    value: EffectivePluginConfigurationInput;
+    value: PluginRuntimeControlSnapshot;
     error?: Error;
     pending: boolean;
     finishPending?: () => void;
   };
   realm: ReconciledPluginRuntimeRealm;
   starter: RecordingStarter;
+  manifestDigest: string;
 }> {
   const codeHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(CODE));
   const codeArtifactDigest = `sha256:${new Uint8Array(codeHash).toHex()}`;
@@ -83,14 +84,17 @@ async function fixture(): Promise<{
     config: null,
   };
   const source = {
-    value: {deployment: [], workspace: [], user: [user]},
+    value: {
+      desiredState: {deployment: [], workspace: [], user: [user]},
+      deniedManifestDigests: [],
+    },
     error: undefined as Error | undefined,
     pending: false,
   };
   const starter = new RecordingStarter();
   const realm = new ReconciledPluginRuntimeRealm({
     identity: REALM,
-    readDesiredState: async () => {
+    readControlState: async () => {
       if (source.pending) {
         await new Promise<void>(resolve => {
           source.finishPending = resolve;
@@ -105,37 +109,39 @@ async function fixture(): Promise<{
     makeCapabilityEnv: () => ({}),
     refreshTimeoutMs: 100,
   });
-  return {source, realm, starter};
+  return {source, realm, starter, manifestDigest: verified.manifestDigest};
 }
 
 describe("reconciled plugin runtime realm", () => {
   it("runs the full desired-state pipeline and preserves active gates on snapshot failure", async () => {
-    const {source, realm, starter} = await fixture();
+    const {source, realm, starter, manifestDigest} = await fixture();
 
     await realm.refresh();
     expect(starter.ids).toHaveLength(1);
-    realm.assertGate("example.runtime", starter.ids[0]!, "active");
+    realm.assertGate("example.runtime", starter.ids[0]!, manifestDigest, "active");
 
     source.error = new Error("UserDO read failed");
     await expect(realm.refresh()).rejects.toThrow("UserDO read failed");
     expect(starter.ids).toHaveLength(1);
-    realm.assertGate("example.runtime", starter.ids[0]!, "active");
+    realm.assertGate("example.runtime", starter.ids[0]!, manifestDigest, "active");
 
     realm.revokeAll();
-    expect(() => realm.assertGate("example.runtime", starter.ids[0]!, "active"))
+    expect(() => realm.assertGate(
+      "example.runtime", starter.ids[0]!, manifestDigest, "active",
+    ))
       .toThrow("Plugin runtime gate denied");
     await realm.close();
   });
 
   it("bounds a desired-state refresh without treating it as empty state", async () => {
-    const {source, realm, starter} = await fixture();
+    const {source, realm, starter, manifestDigest} = await fixture();
     await realm.refresh();
     const activeKey = starter.ids[0]!;
     source.pending = true;
 
     await expect(realm.refresh()).rejects.toThrow("Plugin runtime refresh timed out");
     expect(starter.ids).toEqual([activeKey]);
-    realm.assertGate("example.runtime", activeKey, "active");
+    realm.assertGate("example.runtime", activeKey, manifestDigest, "active");
     realm.revokeAll();
     await expect(Promise.race([
       realm.close().then(() => "closed"),
@@ -144,15 +150,15 @@ describe("reconciled plugin runtime realm", () => {
     source.finishPending?.();
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(starter.ids).toEqual([activeKey]);
-    expect(() => realm.assertGate("example.runtime", activeKey, "active"))
+    expect(() => realm.assertGate("example.runtime", activeKey, manifestDigest, "active"))
       .toThrow("Plugin runtime gate denied");
   });
 
   it("keeps the complete old runtime when scopes conflict", async () => {
-    const {source, realm, starter} = await fixture();
+    const {source, realm, starter, manifestDigest} = await fixture();
     await realm.refresh();
     const activeKey = starter.ids[0]!;
-    const user = source.value.user[0]!;
+    const user = source.value.desiredState.user[0]!;
     const deployment: DeploymentPluginInstallationRecord = {
       schemaVersion: 1,
       scope: "deployment",
@@ -165,13 +171,66 @@ describe("reconciled plugin runtime realm", () => {
       grantedCapabilities: [...user.grantedCapabilities],
       config: null,
     };
-    source.value = {...source.value, deployment: [deployment]};
+    source.value = {
+      ...source.value,
+      desiredState: {...source.value.desiredState, deployment: [deployment]},
+    };
 
     await realm.refresh();
 
     expect(starter.ids).toEqual([activeKey]);
-    realm.assertGate("example.runtime", activeKey, "active");
+    realm.assertGate("example.runtime", activeKey, manifestDigest, "active");
     realm.revokeAll();
+    await realm.close();
+  });
+
+  it("force-removes an active runtime whose immutable manifest becomes denied", async () => {
+    const {source, realm, starter, manifestDigest} = await fixture();
+    await realm.refresh();
+    const activeKey = starter.ids[0]!;
+    realm.assertGate("example.runtime", activeKey, manifestDigest, "active");
+    source.value = {...source.value, deniedManifestDigests: [manifestDigest]};
+
+    await realm.refresh();
+
+    expect(starter.ids).toEqual([activeKey]);
+    expect(() => realm.assertPluginActive("example.runtime"))
+      .toThrow("Plugin runtime plugin is inactive");
+    expect(() => realm.assertGate("example.runtime", activeKey, manifestDigest, "active"))
+      .toThrow("Plugin runtime gate denied");
+    realm.revokeAll();
+    await realm.close();
+  });
+
+  it("applies an exact manifest denial even while desired scopes conflict", async () => {
+    const {source, realm, starter, manifestDigest} = await fixture();
+    await realm.refresh();
+    const activeKey = starter.ids[0]!;
+    const user = source.value.desiredState.user[0]!;
+    source.value = {
+      deniedManifestDigests: [manifestDigest],
+      desiredState: {
+        ...source.value.desiredState,
+        deployment: [{
+          schemaVersion: 1,
+          scope: "deployment",
+          targetId: "admin-settings",
+          installationId: "deployment-installation",
+          pluginId: user.pluginId,
+          packageVersion: user.packageVersion,
+          manifestDigest: user.manifestDigest,
+          enabled: true,
+          grantedCapabilities: [...user.grantedCapabilities],
+          config: null,
+        }],
+      },
+    };
+
+    await realm.refresh();
+
+    expect(starter.ids).toEqual([activeKey]);
+    expect(() => realm.assertPluginActive("example.runtime"))
+      .toThrow("Plugin runtime plugin is inactive");
     await realm.close();
   });
 });

@@ -27,7 +27,12 @@ import { ambientGatekeeperMode } from "./provisioning-policy";
 import { listFeaturedBlueprintsFromKv, readBlueprintContent, readBlueprintKvRecord, sanitizeBlueprintOutput } from "./blueprint-archive";
 import { WebFetchEnv } from "./web-fetch";
 import { FirecrawlSearchEnv } from "./firecrawl-search";
-import { UserDurableObject, UserAiModelRecord, type UserChatContext, type WorkspaceOutputEntry } from "./user";
+import {
+  UserDurableObject,
+  UserAiModelRecord,
+  type UserChatContext,
+  type WorkspaceOutputEntry,
+} from "./user";
 import { AgentSpawnerBinding } from "./agent-spawner-binding";
 import { recordAnalytics } from "./analytics";
 import { reportIssue } from "@gadgets/backend-utils/error-reporting";
@@ -47,8 +52,19 @@ import {
 } from "./chat-attachment-validation";
 import { renderGadgetPdf } from "./browser-export";
 import { bundledPluginManifestResolver } from "./bundled-plugin-manifests.js";
+import { bundledPluginCodeArtifactResolver } from "./bundled-plugin-artifacts.js";
 import {
+  WorkerLoaderPluginWorkerStarter,
+  type PluginRuntimeRealmIdentity,
+} from "./dynamic-worker-plugin-activator.js";
+import { PluginRuntimeRealms, type PluginRuntimeRealmSession } from "./plugin-runtime-realms.js";
+import { ReconciledPluginRuntimeRealm } from "./reconciled-plugin-runtime-realm.js";
+import {
+  decodePluginRuntimePolicySnapshot,
+  decodeUserPluginInstallationSnapshot,
   resolveApprovedPluginManifest,
+  type DeploymentPluginInstallationRecord,
+  type UserPluginInstallation,
   type WorkspacePluginAuditEvent,
   type WorkspacePluginInstallationRecord,
 } from "./plugin-installation.js";
@@ -1036,6 +1052,9 @@ class OverseerImpl implements AgentHooks {
 
   users: DurableObjectNamespace<UserDurableObject>;
 
+  /** Isolate-local runtime projections keyed by authenticated user and effective role. */
+  readonly pluginRuntimeRealms: PluginRuntimeRealms;
+
   // Tracks the size of the most-recent snapshot, and the size of all incremental updates since,
   // in order to help decide when to make a new snapshot.
   #snapshotMetrics?: {snapshotSize: number, logSize: number};
@@ -1322,6 +1341,15 @@ class OverseerImpl implements AgentHooks {
     this.storage = makeOverseerStorage(ctx.storage);
     this.users = this.ctx.exports.UserDurableObject;
     this.ownerId = this.storage.ownerId.get();
+    this.pluginRuntimeRealms = new PluginRuntimeRealms(
+      this.ctx.id.toString(),
+      identity => this.#createPluginRuntimeRealm(identity),
+      cleanup => this.ctx.waitUntil(cleanup),
+      error => this.logger.warn("plugin runtime realm operation failed", {
+        event: "plugin.runtime.realm.operation.failed",
+        error,
+      }),
+    );
 
     // Run any pending storage migration before anything else can touch storage. This must happen
     // in the constructor (not just open()) because the DO also wakes via constructor-driven
@@ -1376,6 +1404,68 @@ class OverseerImpl implements AgentHooks {
         this.#deliverWaitingExternalMessageResponse(thread.id);
       }
     }
+  }
+
+  #createPluginRuntimeRealm(identity: PluginRuntimeRealmIdentity): ReconciledPluginRuntimeRealm {
+    const workspaceId = this.ctx.id.toString();
+    const user = this.users.get(this.users.idFromString(identity.userId));
+    const adminSettings = this.ctx.exports.AdminSettings.getByName("");
+    const assertTargets = (
+        deployment: DeploymentPluginInstallationRecord[],
+        workspace: WorkspacePluginInstallationRecord[],
+        personal: UserPluginInstallation[]): void => {
+      if (deployment.some(record =>
+        record.scope !== "deployment" || record.targetId !== adminSettings.id.toString())) {
+        throw new Error("Deployment plugin desired state has an invalid owner target.");
+      }
+      if (workspace.some(record =>
+        record.scope !== "workspace" || record.targetId !== workspaceId)) {
+        throw new Error("Workspace plugin desired state has an invalid owner target.");
+      }
+      if (personal.some(record =>
+        record.scope !== "user" || record.targetId !== identity.userId)) {
+        throw new Error("User plugin desired state has an invalid owner target.");
+      }
+    };
+
+    return new ReconciledPluginRuntimeRealm({
+      identity,
+      readControlState: async () => {
+        const [personalSnapshot, policySnapshot] = await Promise.all([
+          user.readUserPluginInstallationsSnapshotForRuntimeHost(),
+          adminSettings.readPluginRuntimePolicySnapshotForHost(),
+        ]);
+        const personal = decodeUserPluginInstallationSnapshot(
+          personalSnapshot,
+          identity.userId,
+        );
+        const policy = decodePluginRuntimePolicySnapshot(
+          policySnapshot,
+          adminSettings.id.toString(),
+        );
+        const deployment = policy.deployment;
+        const workspace = Array.from(this.storage.workspacePluginInstallations.list());
+        assertTargets(deployment, workspace, personal);
+        return {
+          desiredState: {deployment, workspace, user: personal},
+          deniedManifestDigests: policy.deniedManifestDigests,
+        };
+      },
+      manifests: bundledPluginManifestResolver,
+      artifacts: bundledPluginCodeArtifactResolver,
+      starter: new WorkerLoaderPluginWorkerStarter(this.env.LOADER),
+      makeCapabilityEnv: (plan, activationKey) => ({
+        PLUGIN_HOST: this.ctx.exports.PluginRuntimeLoopback({props: {
+          overseerId: identity.overseerId,
+          userId: identity.userId,
+          role: identity.role,
+          generation: identity.generation,
+          pluginId: plan.installation.pluginId,
+          activationKey,
+          manifestDigest: plan.installation.manifestDigest,
+        }}),
+      }),
+    });
   }
 
   // =======================================================================================
@@ -6451,6 +6541,58 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     return Array.from(this.impl.storage.workspacePluginAuditEvents.list());
   }
 
+  /** Verifies one host-minted Dynamic Worker gate claim against the current realm generation. */
+  assertPluginRuntimeGateForHost(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string,
+      phase: "staged" | "active"): void {
+    this.impl.pluginRuntimeRealms.assertGate(
+      identity, pluginId, activationKey, manifestDigest, phase,
+    );
+  }
+
+  /** Asserts bounded host operational health without returning runtime authority material. */
+  assertPluginRuntimeActiveForHost(
+      userId: string,
+      role: CollaboratorRole,
+      pluginId: string): void {
+    this.impl.pluginRuntimeRealms.assertPluginActive({
+      overseerId: this.ctx.id.toString(),
+      userId,
+      role,
+    }, pluginId);
+  }
+
+  /** Exercises the production loopback for one active runtime without returning its claim. */
+  async assertPluginRuntimeLoopbackActiveForHost(
+      userId: string,
+      role: CollaboratorRole,
+      pluginId: string): Promise<void> {
+    const claim = this.impl.pluginRuntimeRealms.activeClaim({
+      overseerId: this.ctx.id.toString(),
+      userId,
+      role,
+    }, pluginId);
+    if (claim === undefined) throw new Error("Plugin runtime plugin is inactive.");
+    await this.ctx.exports.PluginRuntimeLoopback({props: {
+      ...claim,
+      pluginId,
+    }}).assertActive();
+  }
+
+  /** Immediately denies an exact policy-rejected claim and queues local forced reconciliation. */
+  revokeDeniedPluginRuntimeForHost(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): void {
+    this.impl.pluginRuntimeRealms.denyPlugin(
+      identity, pluginId, activationKey, manifestDigest,
+    );
+  }
+
   // `notifyClosed` should be invoked when the return `Overseer` stub is disposed, which is used
   // by AuthenticatedApiImpl.#openGadgetInternal() to detect Durable Object disconnects.
   async open(userId: string, profileId: string,
@@ -6588,15 +6730,22 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
       })();
     }
 
+    const pluginRuntimeSession = await this.impl.pluginRuntimeRealms.acquire({
+      overseerId: this.impl.ctx.id.toString(),
+      userId,
+      role,
+    });
+
     if (role === "use") {
       // "use" collaborators get a restricted capability exposing only the gadget UI.
       return new UseOverseerInterface(
-          this.impl, owner, clientUser, profileId, userId, notifyClosed.dup());
+          this.impl, owner, clientUser, profileId, userId, notifyClosed.dup(),
+          pluginRuntimeSession);
     }
 
     return new OverseerClientInterface(
         this.impl, owner, clientUser, profileId, userId, isOwner, notifyClosed.dup(),
-        ensureCapsules);
+        ensureCapsules, pluginRuntimeSession);
   }
 
   // Called only through AuthenticatedApiImpl. Keeping the draft definition off the returned
@@ -7253,7 +7402,8 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
               private notifyClosed: NativeRpcStub<() => void>,
               // Ambient capsule reconciliation started during open(); listSlashCommands() waits for
               // this so ambient providers are attached when possible.
-               private slashCommandsReady: Promise<void>) {
+              private slashCommandsReady: Promise<void>,
+              private pluginRuntimeSession: PluginRuntimeRealmSession) {
     super();
     this.#leavePresence = joinSessionPresence(
         this.impl, this.clientProfileId, "build", () => this.#getClientProfile());
@@ -7264,6 +7414,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   #leaveOutputsFanout: () => void;
 
   [Symbol.dispose]() {
+    this.pluginRuntimeSession.release();
     this.#leavePresence();
     this.#leaveOutputsFanout();
     this.notifyClosed();
@@ -8971,7 +9122,8 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
               private clientUser: DurableObjectStub<UserDurableObject>,
               private clientProfileId: string,
               clientUserId: string,
-              private notifyClosed: NativeRpcStub<() => void>) {
+              private notifyClosed: NativeRpcStub<() => void>,
+              private pluginRuntimeSession: PluginRuntimeRealmSession) {
     super();
     this.#leavePresence = joinSessionPresence(
         this.impl, this.clientProfileId, "use", () => this.clientUser.whoami());
@@ -8982,6 +9134,7 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
   #leaveOutputsFanout: () => void;
 
   [Symbol.dispose]() {
+    this.pluginRuntimeSession.release();
     this.#leavePresence();
     this.#leaveOutputsFanout();
     this.notifyClosed();

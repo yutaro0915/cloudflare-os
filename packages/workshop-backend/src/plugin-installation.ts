@@ -48,6 +48,112 @@ export interface UserPluginInstallation extends PluginInstallationInput {
   stateRef?: string;
 }
 
+const MAX_PLUGIN_CONFIGURATION_DEPTH = 32;
+const MAX_PLUGIN_CONFIGURATION_VALUES = 10_000;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isDenseArray(value: unknown): value is unknown[] {
+  if (!Array.isArray(value) || Object.keys(value).length !== value.length) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) return false;
+  }
+  return true;
+}
+
+function isUniqueNonemptyStringArray(value: unknown): value is string[] {
+  if (!isDenseArray(value)) return false;
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.length === 0) return false;
+  }
+  return new Set(value).size === value.length;
+}
+
+function isPluginConfiguration(
+    value: unknown,
+    budget: {remaining: number},
+    ancestors = new Set<object>(),
+    depth = 0): value is PluginConfigurationValue {
+  budget.remaining -= 1;
+  if (budget.remaining < 0 || depth > MAX_PLUGIN_CONFIGURATION_DEPTH) return false;
+  if (value === null || typeof value === "boolean" || typeof value === "string") return true;
+  if (typeof value === "number") return Number.isFinite(value) && !Object.is(value, -0);
+  if (typeof value !== "object" || ancestors.has(value)) return false;
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (!isDenseArray(value)) return false;
+      for (const entry of value) {
+        if (!isPluginConfiguration(entry, budget, ancestors, depth + 1)) return false;
+      }
+      return true;
+    }
+    if (!isPlainRecord(value)) return false;
+    return Object.values(value).every(entry =>
+      isPluginConfiguration(entry, budget, ancestors, depth + 1));
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function readInstallationBase(value: Record<string, unknown>): PluginInstallationInput | null {
+  if (
+    typeof value.installationId !== "string" || value.installationId.length === 0 ||
+    typeof value.pluginId !== "string" || value.pluginId.length === 0 ||
+    typeof value.packageVersion !== "string" || value.packageVersion.length === 0 ||
+    typeof value.manifestDigest !== "string" ||
+    !isCanonicalPluginManifestDigest(value.manifestDigest) ||
+    typeof value.enabled !== "boolean" ||
+    !isUniqueNonemptyStringArray(value.grantedCapabilities) ||
+    !isPluginConfiguration(
+      value.config,
+      {remaining: MAX_PLUGIN_CONFIGURATION_VALUES},
+    )
+  ) {
+    return null;
+  }
+  return {
+    installationId: value.installationId,
+    pluginId: value.pluginId,
+    packageVersion: value.packageVersion,
+    manifestDigest: value.manifestDigest,
+    enabled: value.enabled,
+    grantedCapabilities: [...value.grantedCapabilities],
+    config: structuredClone(value.config),
+  };
+}
+
+/** Validates an untyped UserDO runtime snapshot and stamps no ownership by inference. */
+export function decodeUserPluginInstallationSnapshot(
+    snapshot: unknown,
+    expectedTargetId: string): UserPluginInstallation[] {
+  if (!isDenseArray(snapshot)) {
+    throw new TypeError("User plugin snapshot must be a dense array.");
+  }
+  return snapshot.map(value => {
+    if (!isPlainRecord(value)) throw new TypeError("Invalid user plugin installation record.");
+    const base = readInstallationBase(value);
+    if (
+      base === null || value.schemaVersion !== 1 || value.scope !== "user" ||
+      value.targetId !== expectedTargetId ||
+      (value.stateRef !== undefined && typeof value.stateRef !== "string")
+    ) {
+      throw new TypeError("Invalid user plugin installation record.");
+    }
+    return {
+      ...base,
+      schemaVersion: 1,
+      scope: "user",
+      targetId: expectedTargetId,
+      ...(value.stateRef === undefined ? {} : {stateRef: value.stateRef}),
+    };
+  });
+}
+
 /** Desired state persisted by one workspace OverseerDurableObject. */
 export interface WorkspacePluginInstallationRecord extends PluginInstallationInput {
   /** Schema version for the stored installation record. */
@@ -81,6 +187,70 @@ export interface DeploymentPluginInstallationRecord extends PluginInstallationIn
   stateRef?: string;
 }
 
+/** Validates an untyped AdminSettings runtime snapshot without trusting stored owner fields. */
+export function decodeDeploymentPluginInstallationSnapshot(
+    snapshot: unknown,
+    expectedTargetId: string): DeploymentPluginInstallationRecord[] {
+  if (!isDenseArray(snapshot)) {
+    throw new TypeError("Deployment plugin snapshot must be a dense array.");
+  }
+  return snapshot.map(value => {
+    if (!isPlainRecord(value)) {
+      throw new TypeError("Invalid deployment plugin installation record.");
+    }
+    const base = readInstallationBase(value);
+    if (
+      base === null || value.schemaVersion !== 1 || value.scope !== "deployment" ||
+      value.targetId !== expectedTargetId ||
+      (value.stateRef !== undefined && typeof value.stateRef !== "string")
+    ) {
+      throw new TypeError("Invalid deployment plugin installation record.");
+    }
+    return {
+      ...base,
+      schemaVersion: 1,
+      scope: "deployment",
+      targetId: expectedTargetId,
+      ...(value.stateRef === undefined ? {} : {stateRef: value.stateRef}),
+    };
+  });
+}
+
+/** Validated deployment policy projection consumed by one plugin runtime realm refresh. */
+export interface PluginRuntimePolicySnapshot {
+  /** Deployment-scoped desired installations owned by AdminSettings. */
+  deployment: DeploymentPluginInstallationRecord[];
+
+  /** Permanent canonical manifest digest denylist. */
+  deniedManifestDigests: string[];
+}
+
+/** Validates the untyped atomic AdminSettings runtime policy snapshot. */
+export function decodePluginRuntimePolicySnapshot(
+    snapshot: unknown,
+    expectedTargetId: string): PluginRuntimePolicySnapshot {
+  if (!isPlainRecord(snapshot) || !isDenseArray(snapshot.deniedManifestDigests)) {
+    throw new TypeError("Invalid plugin runtime policy snapshot.");
+  }
+  const deniedManifestDigests: string[] = [];
+  for (const digest of snapshot.deniedManifestDigests) {
+    if (
+      typeof digest !== "string" || !isCanonicalPluginManifestDigest(digest) ||
+      deniedManifestDigests.includes(digest)
+    ) {
+      throw new TypeError("Invalid plugin runtime policy snapshot.");
+    }
+    deniedManifestDigests.push(digest);
+  }
+  return {
+    deployment: decodeDeploymentPluginInstallationSnapshot(
+      snapshot.installations,
+      expectedTargetId,
+    ),
+    deniedManifestDigests,
+  };
+}
+
 /** Authenticated deployment administrator stamped into trusted host mutations. */
 export interface PluginMutationActor {
   /** Durable Object ID of the authenticated user. */
@@ -88,6 +258,39 @@ export interface PluginMutationActor {
 
   /** Stable profile identifier used by the authenticated session. */
   profileId: string;
+}
+
+/** Append-only deployment denial of one immutable plugin manifest digest. */
+export interface PluginManifestDenylistRecord {
+  /** Canonical manifest content address that may never activate again. */
+  manifestDigest: string;
+
+  /** Admin UserDO ID stamped by the trusted host. */
+  actorUserId: string;
+
+  /** Admin profile identifier stamped by the trusted host. */
+  actorProfileId: string;
+
+  /** Host timestamp when the permanent denial was first recorded. */
+  deniedAt: number;
+}
+
+/** Host-owned append-only audit evidence for one permanent manifest denial. */
+export interface PluginManifestDenylistAuditEvent extends PluginManifestDenylistRecord {
+  /** Monotonic sequence in the deployment denylist audit stream. */
+  sequence: number;
+
+  /** Permanent action; deny removal is intentionally not supported. */
+  action: "PLUGIN_MANIFEST_DENIED";
+}
+
+/** Trusted AdminApi mutation input with actor fields captured at capability mint time. */
+export interface DenyPluginManifestInput {
+  /** Canonical immutable manifest digest selected by the administrator. */
+  manifestDigest: string;
+
+  /** Authenticated admin actor captured outside browser input. */
+  actor: PluginMutationActor;
 }
 
 /** Verified manifest fields accepted by the AdminSettings persistence boundary. */

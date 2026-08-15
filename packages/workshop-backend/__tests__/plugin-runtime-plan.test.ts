@@ -68,6 +68,7 @@ describe("runtime plugin plan builder", () => {
       plans: [],
       preflightFailures: [{
         installation: installation({manifestDigest: verified!.manifestDigest}),
+        retention: "allowed",
         reason: "RUNTIME_ARTIFACT_NOT_DECLARED",
       }],
     });
@@ -111,6 +112,7 @@ describe("runtime plugin plan builder", () => {
       }],
       preflightFailures: [{
         installation: installation(),
+        retention: "allowed",
         reason: "MANIFEST_NOT_FOUND",
       }],
     });
@@ -136,13 +138,18 @@ describe("runtime plugin plan builder", () => {
     ], resolver)).resolves.toEqual({
       plans: [],
       preflightFailures: [
-        {installation: installation(), reason: "MANIFEST_INTEGRITY_MISMATCH"},
+        {
+          installation: installation(),
+          retention: "allowed",
+          reason: "MANIFEST_INTEGRITY_MISMATCH",
+        },
         {
           installation: installation({
             installationId: "installation-grant-drift",
             manifestDigest: verified!.manifestDigest,
             grantedCapabilities: ["ui.panel", "forged.capability"],
           }),
+          retention: "allowed",
           reason: "MANIFEST_INTEGRITY_MISMATCH",
         },
       ],
@@ -178,5 +185,34 @@ describe("runtime plugin plan builder", () => {
       }],
     });
     expect(runtimeCalls).toEqual([]);
+  });
+
+  it("marks a deployment-denied digest as a forced-removal preflight failure", async () => {
+    const manifest: PluginManifest = {
+      schemaVersion: 3,
+      pluginId: "example.notes",
+      packageVersion: "2.0.0",
+      requestedCapabilities: ["ui.panel"],
+      dependencies: [],
+      runtime: {
+        kind: "dynamic-worker",
+        codeArtifactDigest: `sha256:${"a".repeat(64)}`,
+      },
+    };
+    const resolver = await BundledPluginManifestResolver.create([manifest]);
+    const verified = await resolver.resolve(manifest.pluginId, manifest.packageVersion);
+    if (verified === null) throw new Error("Expected verified manifest.");
+    const denied = installation({manifestDigest: verified.manifestDigest});
+
+    await expect(buildRuntimePluginPlans(
+      [denied], resolver, [verified.manifestDigest],
+    )).resolves.toEqual({
+      plans: [],
+      preflightFailures: [{
+        installation: denied,
+        retention: "forbidden",
+        reason: "MANIFEST_DENYLISTED",
+      }],
+    });
   });
 });

@@ -904,6 +904,18 @@ export interface AdminApi {
   /** Install one exact deployment-scoped plugin after manifest and approval verification. */
   installDeploymentPlugin(request: InstallPluginRequest): Promise<InstallPluginResult>;
 
+  /** Permanently deny one immutable plugin manifest digest for new and existing runtime use. */
+  denyPluginManifest(manifestDigest: string): Promise<{
+    /** Whether the canonical digest is now durably denied. */
+    ok: true;
+  } | {
+    /** The supplied value was not a canonical SHA-256 manifest digest. */
+    ok: false;
+
+    /** Stable validation failure for a caller-correctable digest. */
+    error: "INVALID_MANIFEST_DIGEST";
+  }>;
+
   // Enable or disable new account signups. Existing users can still log in while signups are closed.
   setSignupsEnabled(enabled: boolean): Promise<void>;
 

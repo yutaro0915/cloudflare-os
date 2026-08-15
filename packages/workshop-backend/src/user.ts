@@ -651,6 +651,11 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     return Array.from(this.storage.pluginInstallations.list());
   }
 
+  /** Returns an untyped snapshot for a caller that must revalidate this cross-DO system boundary. */
+  async readUserPluginInstallationsSnapshotForRuntimeHost(): Promise<unknown> {
+    return Array.from(this.storage.pluginInstallations.list());
+  }
+
   /** Lists host-owned plugin audit events in append order. */
   async listUserPluginAuditEvents(): Promise<UserPluginAuditEvent[]> {
     return Array.from(this.storage.pluginAuditEvents.list());

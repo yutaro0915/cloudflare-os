@@ -17,8 +17,11 @@ import type { PluginManifestResolver } from './plugin-manifest-registry.js';
 import {
   isCanonicalPluginManifestDigest,
   resolveApprovedPluginManifest,
+  type DenyPluginManifestInput,
   type DeploymentPluginAuditEvent,
   type DeploymentPluginInstallationRecord,
+  type PluginManifestDenylistAuditEvent,
+  type PluginManifestDenylistRecord,
   type PluginMutationActor,
   type PutDeploymentPluginInstallationInput,
 } from './plugin-installation.js';
@@ -37,6 +40,12 @@ function makeAdminSettingsStorage(storage: DurableObjectStorage) {
         primaryKey: 'pluginId',
       }),
       deploymentPluginAuditEvents: collection<DeploymentPluginAuditEvent>()({
+        primaryKey: 'sequence',
+      }),
+      pluginManifestDenylist: collection<PluginManifestDenylistRecord>()({
+        primaryKey: 'manifestDigest',
+      }),
+      pluginManifestDenylistAuditEvents: collection<PluginManifestDenylistAuditEvent>()({
         primaryKey: 'sequence',
       }),
     },
@@ -58,6 +67,9 @@ function makeAdminSettingsStorage(storage: DurableObjectStorage) {
 
       // Monotonic sequence for the deployment plugin audit collection.
       nextDeploymentPluginAuditSequence: 0,
+
+      // Monotonic sequence for permanent manifest denylist audit evidence.
+      nextPluginManifestDenylistAuditSequence: 0,
     },
   });
 }
@@ -95,6 +107,60 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
   async listDeploymentPluginInstallationsForHost():
       Promise<DeploymentPluginInstallationRecord[]> {
     return Array.from(this.storage.deploymentPluginInstallations.list());
+  }
+
+  /** Returns an untyped snapshot for a caller that must revalidate this cross-DO system boundary. */
+  async readDeploymentPluginInstallationsSnapshotForRuntimeHost(): Promise<unknown> {
+    return Array.from(this.storage.deploymentPluginInstallations.list());
+  }
+
+  /** Returns deployment desired state and permanent denylist in one host policy snapshot. */
+  async readPluginRuntimePolicySnapshotForHost(): Promise<unknown> {
+    return {
+      installations: Array.from(this.storage.deploymentPluginInstallations.list()),
+      deniedManifestDigests: Array.from(
+        this.storage.pluginManifestDenylist.list(),
+        record => record.manifestDigest,
+      ).toSorted(),
+    };
+  }
+
+  /** Fails closed for malformed values and otherwise checks the permanent deployment denylist. */
+  async isPluginManifestDeniedForRuntimeHost(manifestDigest: string): Promise<boolean> {
+    return !isCanonicalPluginManifestDigest(manifestDigest) ||
+      this.storage.pluginManifestDenylist.get(manifestDigest) !== undefined;
+  }
+
+  /** Lists append-only manifest denial evidence for trusted host operations and tests. */
+  async listPluginManifestDenylistAuditEventsForHost():
+      Promise<PluginManifestDenylistAuditEvent[]> {
+    return Array.from(this.storage.pluginManifestDenylistAuditEvents.list());
+  }
+
+  /** Permanently denies one canonical manifest digest and atomically appends its audit evidence. */
+  async denyPluginManifest(input: DenyPluginManifestInput): Promise<void> {
+    if (!isCanonicalPluginManifestDigest(input.manifestDigest)) {
+      throw new TypeError("Plugin manifest denylist requires a canonical SHA-256 digest.");
+    }
+    this.ctx.storage.transactionSync(() => {
+      if (this.storage.pluginManifestDenylist.get(input.manifestDigest) !== undefined) return;
+      const deniedAt = Date.now();
+      const record: PluginManifestDenylistRecord = {
+        manifestDigest: input.manifestDigest,
+        actorUserId: input.actor.userId,
+        actorProfileId: input.actor.profileId,
+        deniedAt,
+      };
+      const sequence = this.storage.nextPluginManifestDenylistAuditSequence.get();
+      const event: PluginManifestDenylistAuditEvent = {
+        ...record,
+        sequence,
+        action: "PLUGIN_MANIFEST_DENIED",
+      };
+      this.storage.pluginManifestDenylist.put(record);
+      this.storage.pluginManifestDenylistAuditEvents.put(event);
+      this.storage.nextPluginManifestDenylistAuditSequence.put(sequence + 1);
+    });
   }
 
   /** Lists deployment plugin audit events for trusted host orchestration and tests. */
@@ -657,6 +723,19 @@ export class AdminApiImpl extends RpcTarget implements AdminApi {
       actor: this.actor,
     });
     return {ok: true, installationId};
+  }
+
+  async denyPluginManifest(manifestDigest: string): Promise<{
+    ok: true;
+  } | {
+    ok: false;
+    error: "INVALID_MANIFEST_DIGEST";
+  }> {
+    if (!isCanonicalPluginManifestDigest(manifestDigest)) {
+      return {ok: false, error: "INVALID_MANIFEST_DIGEST"};
+    }
+    await this.admin.denyPluginManifest({manifestDigest, actor: this.actor});
+    return {ok: true};
   }
 
   async setSignupsEnabled(enabled: boolean): Promise<void> {

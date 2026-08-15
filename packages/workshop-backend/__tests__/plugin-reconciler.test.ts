@@ -98,9 +98,10 @@ function plan(pluginId: string, packageVersion = "1.0.0",
 
 function preflightFailure(
     pluginId: string,
-    reason: RuntimePluginPreflightFailure["reason"] = "MANIFEST_INTEGRITY_MISMATCH",
+    reason: "MANIFEST_INTEGRITY_MISMATCH" | "MANIFEST_NOT_FOUND" |
+      "RUNTIME_ARTIFACT_NOT_DECLARED" = "MANIFEST_INTEGRITY_MISMATCH",
 ): RuntimePluginPreflightFailure {
-  return {installation: installation(pluginId), reason};
+  return {installation: installation(pluginId), retention: "allowed", reason};
 }
 
 function runtimeIdentity(pluginId: string, packageVersion = "1.0.0") {
@@ -144,6 +145,73 @@ describe("plugin reconciler", () => {
       ],
     });
     expect(runtime.events).toEqual(["replace:c.unrelated@1.0.0:none"]);
+  });
+
+  it("force-removes a denylisted active provider and suspends its dependent", async () => {
+    const runtime = new FakeRuntimeAdapter();
+    const reconciler = new PluginReconciler(runtime);
+    await reconciler.reconcile({
+      ok: true,
+      plans: [plan("a.consumer", "1.0.0", ["b.provider"]), plan("b.provider")],
+    });
+    const consumer = runtime.active.get("a.consumer");
+    const provider = runtime.active.get("b.provider");
+    if (!consumer || !provider) throw new Error("Expected initial dependency graph to be active.");
+    runtime.events.length = 0;
+
+    await expect(reconciler.reconcile({
+      ok: true,
+      plans: [plan("a.consumer", "1.0.0", ["b.provider"])],
+      preflightFailures: [{
+        installation: installation("b.provider"),
+        retention: "forbidden",
+        reason: "MANIFEST_DENYLISTED",
+      }],
+    })).resolves.toEqual({
+      ok: true,
+      states: [
+        {
+          pluginId: "a.consumer",
+          status: "suspended",
+          candidate: runtimeIdentity("a.consumer"),
+          reason: "DEPENDENCY_UNAVAILABLE",
+        },
+        {
+          pluginId: "b.provider",
+          status: "failed",
+          candidate: runtimeIdentity("b.provider"),
+          reason: "MANIFEST_DENYLISTED",
+        },
+      ],
+    });
+    expect(runtime.events).toEqual([`remove:${consumer.id}`, `remove:${provider.id}`]);
+  });
+
+  it("retains a safe old runtime when only the desired replacement digest is denied", async () => {
+    const runtime = new FakeRuntimeAdapter();
+    const reconciler = new PluginReconciler(runtime);
+    await reconciler.reconcile({ok: true, plans: [plan("example.runtime", "1.0.0")]});
+    runtime.events.length = 0;
+
+    await expect(reconciler.reconcile({
+      ok: true,
+      plans: [],
+      preflightFailures: [{
+        installation: installation("example.runtime", "2.0.0"),
+        retention: "forbidden",
+        reason: "MANIFEST_DENYLISTED",
+      }],
+    })).resolves.toEqual({
+      ok: true,
+      states: [{
+        pluginId: "example.runtime",
+        status: "failed",
+        candidate: runtimeIdentity("example.runtime", "2.0.0"),
+        reason: "MANIFEST_DENYLISTED",
+        retainedActive: runtimeIdentity("example.runtime", "1.0.0"),
+      }],
+    });
+    expect(runtime.events).toEqual([]);
   });
 
   it("activates an initial desired plugin through the runtime port", async () => {

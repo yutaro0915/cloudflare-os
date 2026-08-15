@@ -17,16 +17,27 @@ export interface RuntimePluginPlan {
   runtime: PluginRuntimeDescriptor;
 }
 
-/** One desired candidate rejected before runtime activation by trusted host verification. */
-export interface RuntimePluginPreflightFailure {
+interface RuntimePluginPreflightFailureBase {
   /** Installation that could not be authorized as a runtime candidate. */
   installation: EffectivePluginInstallation;
+}
+
+/** One desired candidate rejected before activation, with an explicit old-runtime policy. */
+export type RuntimePluginPreflightFailure = RuntimePluginPreflightFailureBase & ({
+  /** Ordinary candidate failure may retain an independently safe old runtime. */
+  retention: "allowed";
 
   /** Stable failure derived from exact immutable manifest verification. */
   reason:
     "MANIFEST_NOT_FOUND" | "MANIFEST_INTEGRITY_MISMATCH" |
     "RUNTIME_ARTIFACT_NOT_DECLARED";
-}
+} | {
+  /** Deployment safety policy requires an old runtime with this digest to stop. */
+  retention: "forbidden";
+
+  /** Permanent deployment denial of this immutable manifest digest. */
+  reason: "MANIFEST_DENYLISTED";
+});
 
 /** Runtime boundary that atomically replaces or removes one isolated plugin activation. */
 export interface PluginRuntimeAdapter<Lease> {
@@ -217,6 +228,29 @@ export class PluginReconciler<Lease> {
     return run;
   }
 
+  /** Removes active runtimes whose exact immutable manifest digest is centrally denied. */
+  denyManifests(manifestDigests: readonly string[]): Promise<PluginReconciliationResult> {
+    const denied = new Set(structuredClone(manifestDigests));
+    const run = this.#reconciliationTail.then(() => {
+      const plans: RuntimePluginPlan[] = [];
+      const preflightFailures: RuntimePluginPreflightFailure[] = [];
+      for (const current of this.#active.values()) {
+        if (denied.has(current.plan.installation.manifestDigest)) {
+          preflightFailures.push({
+            installation: current.plan.installation,
+            retention: "forbidden",
+            reason: "MANIFEST_DENYLISTED",
+          });
+        } else {
+          plans.push(current.plan);
+        }
+      }
+      return this.#apply({ok: true, plans, preflightFailures});
+    });
+    this.#reconciliationTail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
   async #apply(input: PluginReconciliationInput): Promise<PluginReconciliationResult> {
     if (!input.ok) {
       const active = Array.from(this.#active.values(), current =>
@@ -251,6 +285,13 @@ export class PluginReconciler<Lease> {
       if (memoized !== undefined) return memoized;
       const current = this.#active.get(pluginId);
       if (current === undefined || visiting.has(pluginId)) return false;
+      const failure = failuresByPluginId.get(pluginId);
+      if (
+        failure?.retention === "forbidden" &&
+        failure.installation.manifestDigest === current.plan.installation.manifestDigest
+      ) {
+        return false;
+      }
       const state = statesByPluginId.get(pluginId);
       const isConditionalCandidate = state?.status === "suspended" ||
         (state?.status === "failed" && (
@@ -371,12 +412,15 @@ export class PluginReconciler<Lease> {
     for (const failure of preflightFailures) {
       const pluginId = failure.installation.pluginId;
       const current = this.#active.get(pluginId);
+      const forbidsCurrent = failure.retention === "forbidden" &&
+        current?.plan.installation.manifestDigest === failure.installation.manifestDigest;
       statesByPluginId.set(pluginId, {
         pluginId,
         status: "failed",
         candidate: identity(failure.installation),
         reason: failure.reason,
-        ...(current === undefined ? {} : {retainedActive: identity(current.plan.installation)}),
+        ...(current === undefined || forbidsCurrent
+          ? {} : {retainedActive: identity(current.plan.installation)}),
       });
     }
     for (const plan of plans) {
