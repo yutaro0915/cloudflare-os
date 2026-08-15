@@ -1,4 +1,5 @@
 import type { WorkerEntrypoint } from "cloudflare:workers";
+import type { CollaboratorRole } from "@gadgets/workshop-shared/api";
 import type {
   ActivePluginExecution,
   PluginExecutionActivator,
@@ -64,6 +65,24 @@ export interface PluginCapabilityGateRegistry {
   stage(plan: RuntimePluginPlan, activationKey: string): PluginCapabilityGatePreparation;
 }
 
+/** Stable authenticated locator for one user-role realm inside an owning workspace. */
+export interface PluginRuntimeRealmLocator {
+  /** Owning workspace Durable Object ID. */
+  readonly overseerId: string;
+
+  /** Authenticated User Durable Object ID. */
+  readonly userId: string;
+
+  /** Effective workspace role whose policy is bound into the cached Worker definition. */
+  readonly role: CollaboratorRole;
+}
+
+/** Host-generated realm generation bound into cached Worker identity and loopback authority. */
+export interface PluginRuntimeRealmIdentity extends PluginRuntimeRealmLocator {
+  /** Opaque nonce that prevents a released warm Worker claim from becoming authoritative again. */
+  readonly generation: string;
+}
+
 /** Production adapter around the repository's existing Worker Loader binding. */
 export class WorkerLoaderPluginWorkerStarter implements PluginWorkerStarter {
   /** Wraps only the real `get` method instead of mirroring the Worker Loader API. */
@@ -120,8 +139,11 @@ function canonicalJson(value: unknown, ancestors = new Set<object>()): string {
 }
 
 /** Computes a fixed-length cache key from code, authority, configuration, and host policy. */
-export async function pluginActivationKey(plan: RuntimePluginPlan): Promise<string> {
+export async function pluginActivationKey(
+    realm: PluginRuntimeRealmIdentity,
+    plan: RuntimePluginPlan): Promise<string> {
   const canonical = canonicalJson({
+    realm,
     scope: plan.installation.scope,
     targetId: plan.installation.targetId,
     installationId: plan.installation.installationId,
@@ -186,6 +208,7 @@ function workerCode(
 export class DynamicWorkerPluginExecutionActivator implements PluginExecutionActivator {
   /** Creates a default-deny activator without exposing Worker Loader details to Cordis. */
   constructor(
+    private realm: PluginRuntimeRealmIdentity,
     private starter: PluginWorkerStarter,
     private artifacts: VerifyingPluginCodeArtifactResolver,
     private gates: PluginCapabilityGateRegistry,
@@ -198,7 +221,7 @@ export class DynamicWorkerPluginExecutionActivator implements PluginExecutionAct
     if (candidate.installation.grantedCapabilities.length > 0) {
       throw new Error("Plugin capability bindings are not implemented for this runtime policy.");
     }
-    const activationKey = await pluginActivationKey(candidate);
+    const activationKey = await pluginActivationKey(this.realm, candidate);
     const gate = this.gates.stage(candidate, activationKey);
     addCleanup("plugin-capability-gate", () => gate.abort());
     try {

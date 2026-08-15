@@ -24,12 +24,14 @@ export type PluginCapabilityEnvFactory = (
 export class InMemoryPluginCapabilityGateRegistry implements PluginCapabilityGateRegistry {
   readonly #staged = new Set<string>();
   readonly #activeByPluginId = new Map<string, ActiveGate>();
+  #closed = false;
 
   /** Creates a default-deny registry around a host-owned Service Binding factory. */
   constructor(private makeEnv: PluginCapabilityEnvFactory) {}
 
   /** Stages an unselected activation and its stable loopback bindings. */
   stage(plan: RuntimePluginPlan, activationKey: string): PluginCapabilityGatePreparation {
+    if (this.#closed) throw new Error("Plugin capability gate realm is closed.");
     const pluginId = plan.installation.pluginId;
     const env = this.makeEnv(plan, activationKey);
     this.#staged.add(activationKey);
@@ -37,6 +39,7 @@ export class InMemoryPluginCapabilityGateRegistry implements PluginCapabilityGat
     return {
       env,
       commit: () => {
+        if (this.#closed) throw new Error("Plugin capability gate realm is closed.");
         if (state !== "staged") throw new Error("Plugin capability gate is no longer staged.");
         state = "committed";
         this.#staged.delete(activationKey);
@@ -66,5 +69,12 @@ export class InMemoryPluginCapabilityGateRegistry implements PluginCapabilityGat
   /** Returns whether a capability call belongs to the currently selected plugin activation. */
   isActive(pluginId: string, activationKey: string): boolean {
     return this.#activeByPluginId.get(pluginId)?.activationKey === activationKey;
+  }
+
+  /** Permanently denies this realm before asynchronous runtime cleanup begins. */
+  close(): void {
+    this.#closed = true;
+    this.#staged.clear();
+    this.#activeByPluginId.clear();
   }
 }

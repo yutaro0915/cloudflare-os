@@ -65,4 +65,18 @@ describe("plugin capability gate", () => {
     expect(reconstructed.isActive("example.runtime", "activation-v1")).toBe(false);
     active.revoke();
   });
+
+  it("seals a released realm before an in-flight candidate can commit", () => {
+    const gates = new InMemoryPluginCapabilityGateRegistry(key => ({PLUGIN_HOST: {key}}));
+    const active = gates.stage(plan("1.0.0"), "activation-v1").commit();
+    const inFlight = gates.stage(plan("2.0.0"), "activation-v2");
+
+    gates.close();
+
+    expect(gates.isActive("example.runtime", "activation-v1")).toBe(false);
+    expect(gates.isStaged("activation-v2")).toBe(false);
+    expect(() => inFlight.commit(active)).toThrow("Plugin capability gate realm is closed");
+    expect(() => gates.stage(plan("3.0.0"), "activation-v3"))
+      .toThrow("Plugin capability gate realm is closed");
+  });
 });

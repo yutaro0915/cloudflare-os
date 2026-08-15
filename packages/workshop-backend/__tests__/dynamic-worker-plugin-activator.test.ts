@@ -6,6 +6,7 @@ import {
   pluginActivationKey,
   type PluginCapabilityGatePreparation,
   type PluginCapabilityGateRegistry,
+  type PluginRuntimeRealmIdentity,
   type PluginWorkerControl,
   type PluginWorkerStarter,
 } from "../src/dynamic-worker-plugin-activator.js";
@@ -16,6 +17,12 @@ import {
 
 const CODE = `export default { handshake() { return "ok"; } };\n`;
 const DIGEST = "sha256:5b056b8472e4c36854cb9fdaa5c173b5dada6ddf49e86006c5851eff8091e8c8";
+const REALM: PluginRuntimeRealmIdentity = {
+  overseerId: "workspace-a",
+  userId: "user-a",
+  role: "build",
+  generation: "generation-a",
+};
 
 function plan(overrides: Partial<RuntimePluginPlan["installation"]> = {}): RuntimePluginPlan {
   return {
@@ -104,6 +111,7 @@ describe("Dynamic Worker plugin activator", () => {
     starter.invokeCodeTwice = true;
     const gates = new FakeGateRegistry();
     const activator = new DynamicWorkerPluginExecutionActivator(
+      REALM,
       starter,
       new VerifyingPluginCodeArtifactResolver(store),
       gates,
@@ -136,6 +144,7 @@ describe("Dynamic Worker plugin activator", () => {
     starter.invokeCodeTwice = true;
     const gates = new FakeGateRegistry();
     const activator = new DynamicWorkerPluginExecutionActivator(
+      REALM,
       starter,
       new VerifyingPluginCodeArtifactResolver(store),
       gates,
@@ -152,6 +161,7 @@ describe("Dynamic Worker plugin activator", () => {
     const starter = new FakeStarter();
     const gates = new FakeGateRegistry();
     const activator = new DynamicWorkerPluginExecutionActivator(
+      REALM,
       starter,
       new VerifyingPluginCodeArtifactResolver(store),
       gates,
@@ -169,6 +179,7 @@ describe("Dynamic Worker plugin activator", () => {
     starter.verifyError = new Error("handshake failed");
     const gates = new FakeGateRegistry();
     const activator = new DynamicWorkerPluginExecutionActivator(
+      REALM,
       starter,
       new VerifyingPluginCodeArtifactResolver(new MutableStore()),
       gates,
@@ -185,6 +196,7 @@ describe("Dynamic Worker plugin activator", () => {
     starter.verifyNeverSettles = true;
     const gates = new FakeGateRegistry();
     const activator = new DynamicWorkerPluginExecutionActivator(
+      REALM,
       starter,
       new VerifyingPluginCodeArtifactResolver(new MutableStore()),
       gates,
@@ -201,11 +213,12 @@ describe("Dynamic Worker plugin activator", () => {
 
   it("keys warm workers by the complete authority and runtime policy definition", async () => {
     const base = plan();
-    const expected = await pluginActivationKey(base);
+    const expected = await pluginActivationKey(REALM, base);
     expect(expected).toBe(
-      "plugin-worker:v1:0463c865f0ceaf45a1514c339d975219d397baf3137414e0c5cd05c8114f87b1",
+      "plugin-worker:v1:aec392f38111805aa92435a4aa74c28ff92cfce2b98d506d4235d029606582ef",
     );
-    await expect(pluginActivationKey(structuredClone(base))).resolves.toBe(expected);
+    await expect(pluginActivationKey(structuredClone(REALM), structuredClone(base)))
+      .resolves.toBe(expected);
 
     const variants: RuntimePluginPlan[] = [
       plan({targetId: "user-b"}),
@@ -216,14 +229,24 @@ describe("Dynamic Worker plugin activator", () => {
       {...plan(), runtime: {kind: "dynamic-worker", codeArtifactDigest: `sha256:${"d".repeat(64)}`}},
     ];
     for (const variant of variants) {
-      await expect(pluginActivationKey(variant)).resolves.not.toBe(expected);
+      await expect(pluginActivationKey(REALM, variant)).resolves.not.toBe(expected);
+    }
+
+    const realmVariants: PluginRuntimeRealmIdentity[] = [
+      {...REALM, overseerId: "workspace-b"},
+      {...REALM, userId: "user-b"},
+      {...REALM, role: "use"},
+      {...REALM, generation: "generation-b"},
+    ];
+    for (const realm of realmVariants) {
+      await expect(pluginActivationKey(realm, base)).resolves.not.toBe(expected);
     }
   });
 
   it.each([NaN, Infinity, -Infinity, -0])(
     "rejects non-JSON-safe numeric configuration %s",
     async invalidNumber => {
-      await expect(pluginActivationKey(plan({config: invalidNumber})))
+      await expect(pluginActivationKey(REALM, plan({config: invalidNumber})))
         .rejects.toThrow("finite JSON number");
     },
   );
@@ -236,8 +259,8 @@ describe("Dynamic Worker plugin activator", () => {
     const datedPlan = plan();
     Reflect.set(datedPlan.installation, "config", new Date(0));
 
-    await expect(pluginActivationKey(cyclicPlan)).rejects.toThrow("cyclic");
-    await expect(pluginActivationKey(datedPlan)).rejects.toThrow("plain JSON objects");
+    await expect(pluginActivationKey(REALM, cyclicPlan)).rejects.toThrow("cyclic");
+    await expect(pluginActivationKey(REALM, datedPlan)).rejects.toThrow("plain JSON objects");
   });
 
   it("uses the real Worker Loader type without exposing it to the domain activator", () => {
