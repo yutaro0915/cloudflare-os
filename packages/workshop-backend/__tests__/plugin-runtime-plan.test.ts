@@ -28,7 +28,7 @@ describe("runtime plugin plan builder", () => {
       schemaVersion: 3,
       pluginId: "example.notes",
       packageVersion: "2.0.0",
-      requestedCapabilities: ["ui.panel"],
+      requestedCapabilities: ["workspace.metadata.read"],
       dependencies: ["example.storage", "example.auth"],
       runtime: {
         kind: "dynamic-worker",
@@ -39,12 +39,18 @@ describe("runtime plugin plan builder", () => {
     const verified = await resolver.resolve(manifest.pluginId, manifest.packageVersion);
 
     const result = await buildRuntimePluginPlans([
-      installation({manifestDigest: verified!.manifestDigest}),
+      installation({
+        manifestDigest: verified!.manifestDigest,
+        grantedCapabilities: ["workspace.metadata.read"],
+      }),
     ], resolver);
 
     expect(result).toEqual({
       plans: [{
-        installation: installation({manifestDigest: verified!.manifestDigest}),
+        installation: installation({
+          manifestDigest: verified!.manifestDigest,
+          grantedCapabilities: ["workspace.metadata.read"],
+        }),
         dependencies: ["example.auth", "example.storage"],
         runtime: manifest.runtime,
       }],
@@ -212,6 +218,77 @@ describe("runtime plugin plan builder", () => {
         installation: denied,
         retention: "forbidden",
         reason: "MANIFEST_DENYLISTED",
+      }],
+    });
+  });
+
+  it("rejects unsupported runtime capabilities without blocking unrelated plugins", async () => {
+    const unsupportedManifest: PluginManifest = {
+      schemaVersion: 3,
+      pluginId: "example.unsupported",
+      packageVersion: "1.0.0",
+      requestedCapabilities: ["workspace.write"],
+      dependencies: [],
+      runtime: {
+        kind: "dynamic-worker",
+        codeArtifactDigest: `sha256:${"c".repeat(64)}`,
+      },
+    };
+    const supportedManifest: PluginManifest = {
+      schemaVersion: 3,
+      pluginId: "example.metadata",
+      packageVersion: "1.0.0",
+      requestedCapabilities: ["workspace.metadata.read"],
+      dependencies: [],
+      runtime: {
+        kind: "dynamic-worker",
+        codeArtifactDigest: `sha256:${"d".repeat(64)}`,
+      },
+    };
+    const resolver = await BundledPluginManifestResolver.create([
+      unsupportedManifest,
+      supportedManifest,
+    ]);
+    const unsupported = await resolver.resolve("example.unsupported", "1.0.0");
+    const supported = await resolver.resolve("example.metadata", "1.0.0");
+
+    await expect(buildRuntimePluginPlans([
+      installation({
+        installationId: "installation-unsupported",
+        pluginId: "example.unsupported",
+        packageVersion: "1.0.0",
+        manifestDigest: unsupported!.manifestDigest,
+        grantedCapabilities: ["workspace.write"],
+      }),
+      installation({
+        installationId: "installation-metadata",
+        pluginId: "example.metadata",
+        packageVersion: "1.0.0",
+        manifestDigest: supported!.manifestDigest,
+        grantedCapabilities: ["workspace.metadata.read"],
+      }),
+    ], resolver)).resolves.toEqual({
+      plans: [{
+        installation: installation({
+          installationId: "installation-metadata",
+          pluginId: "example.metadata",
+          packageVersion: "1.0.0",
+          manifestDigest: supported!.manifestDigest,
+          grantedCapabilities: ["workspace.metadata.read"],
+        }),
+        dependencies: [],
+        runtime: supportedManifest.runtime,
+      }],
+      preflightFailures: [{
+        installation: installation({
+          installationId: "installation-unsupported",
+          pluginId: "example.unsupported",
+          packageVersion: "1.0.0",
+          manifestDigest: unsupported!.manifestDigest,
+          grantedCapabilities: ["workspace.write"],
+        }),
+        retention: "allowed",
+        reason: "CAPABILITY_UNSUPPORTED",
       }],
     });
   });

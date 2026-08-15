@@ -11,6 +11,7 @@ const EXPECTED_RPC_ERROR_MESSAGES = new Set([
   "Plugin runtime realm is unavailable.",
   "Plugin runtime plugin is inactive.",
   "Plugin manifest is denied.",
+  "Plugin runtime capability is no longer authorized.",
 ]);
 
 export default defineConfig({

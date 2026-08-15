@@ -43,7 +43,7 @@ class RecordingStarter implements PluginWorkerStarter {
       getCode: () => Promise<WorkerLoaderWorkerCode>): Promise<PluginWorkerControl> {
     this.ids.push(id);
     this.definitions.push(await getCode());
-    return {verify: async () => {}};
+    return {verify: async () => {}, invoke: async () => null};
   }
 }
 

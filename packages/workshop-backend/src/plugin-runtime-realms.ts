@@ -2,7 +2,17 @@ import type {
   PluginRuntimeRealmIdentity,
   PluginRuntimeRealmLocator,
 } from "./dynamic-worker-plugin-activator.js";
-import type { PluginRuntimeGateClaim } from "./plugin-capability-gate.js";
+import type {
+  PluginCapabilityAuthority,
+  PluginRuntimeGateClaim,
+  PluginStagedInstallationAuthority,
+} from "./plugin-capability-gate.js";
+
+/** Exact host gate plus the opaque reconciler lease epoch selected behind it. */
+export interface PluginRuntimeLeaseClaim extends PluginRuntimeGateClaim {
+  /** Changes after every successful activation, even when the desired plan is identical. */
+  leaseEpoch: string;
+}
 
 /** Runtime operations owned by exactly one authenticated workspace-user-role realm. */
 export interface PluginRuntimeRealm {
@@ -26,8 +36,26 @@ export interface PluginRuntimeRealm {
   /** Throws unless the host selected some current-generation activation for this package. */
   assertPluginActive(pluginId: string): void;
 
+  /** Returns authority only for one exact active claim with a host-owned grant. */
+  activeCapabilityAuthority(
+    pluginId: string,
+    activationKey: string,
+    manifestDigest: string,
+    capability: string,
+  ): PluginCapabilityAuthority | undefined;
+
+  /** Returns one exact staged installation snapshot for final owner authorization. */
+  stagedInstallationAuthority(
+    pluginId: string,
+    activationKey: string,
+    manifestDigest: string,
+  ): PluginStagedInstallationAuthority | undefined;
+
   /** Returns one owned active claim for a trusted host loopback diagnostic. */
-  activeClaim(pluginId: string): PluginRuntimeGateClaim | undefined;
+  activeClaim(pluginId: string): PluginRuntimeLeaseClaim | undefined;
+
+  /** Invokes one active plugin without trusting or returning its output. */
+  assertWorkspaceMetadataCapability(pluginId: string): Promise<void>;
 
   /** Immediately denies one exact claim and queues forced denylist reconciliation. */
   denyPlugin(
@@ -35,6 +63,16 @@ export interface PluginRuntimeRealm {
     activationKey: string,
     manifestDigest: string,
   ): boolean;
+
+  /** Aborts one exact staged candidate without touching the active runtime lease. */
+  denyStagedPlugin(
+    pluginId: string,
+    activationKey: string,
+    manifestDigest: string,
+  ): boolean;
+
+  /** Physically retires one exact reconciler lease after synchronous logical revocation. */
+  removeRevokedPlugin(pluginId: string, leaseEpoch: string): Promise<void>;
 }
 
 /** Reference-counted session ownership returned without exposing the underlying realm. */
@@ -127,15 +165,71 @@ export class PluginRuntimeRealms {
     entry.realm.assertPluginActive(pluginId);
   }
 
+  /** Returns host-owned authority for an exact current-generation active claim. */
+  activeCapabilityAuthority(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string,
+      capability: string): PluginCapabilityAuthority | undefined {
+    this.#assertWorkspace(identity);
+    const entry = this.#entries.get(this.#key(identity));
+    if (entry === undefined || entry.identity.generation !== identity.generation) {
+      throw new Error("Plugin runtime realm is unavailable.");
+    }
+    return entry.realm.activeCapabilityAuthority(
+      pluginId, activationKey, manifestDigest, capability,
+    );
+  }
+
+  /** Returns one exact current-generation staged candidate for owner SSOT revalidation. */
+  stagedInstallationAuthority(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): PluginStagedInstallationAuthority | undefined {
+    this.#assertWorkspace(identity);
+    const entry = this.#entries.get(this.#key(identity));
+    if (entry === undefined || entry.identity.generation !== identity.generation) {
+      throw new Error("Plugin runtime realm is unavailable.");
+    }
+    return entry.realm.stagedInstallationAuthority(pluginId, activationKey, manifestDigest);
+  }
+
   /** Returns one current-generation active claim without widening browser RPC capabilities. */
   activeClaim(
       identity: PluginRuntimeRealmLocator,
-      pluginId: string): (PluginRuntimeRealmIdentity & PluginRuntimeGateClaim) | undefined {
+      pluginId: string): (PluginRuntimeRealmIdentity & PluginRuntimeLeaseClaim) | undefined {
     this.#assertWorkspace(identity);
     const entry = this.#entries.get(this.#key(identity));
     if (entry === undefined) return undefined;
     const claim = entry.realm.activeClaim(pluginId);
     return claim === undefined ? undefined : {...entry.identity, ...claim};
+  }
+
+  /** Invokes one active plugin without exposing its worker control or gate claim. */
+  async assertWorkspaceMetadataCapability(
+      identity: PluginRuntimeRealmLocator,
+      pluginId: string): Promise<void> {
+    this.#assertWorkspace(identity);
+    const entry = this.#entries.get(this.#key(identity));
+    if (entry === undefined) throw new Error("Plugin runtime realm is unavailable.");
+    const claim = entry.realm.activeClaim(pluginId);
+    try {
+      await entry.realm.assertWorkspaceMetadataCapability(pluginId);
+    } catch (error) {
+      if (claim !== undefined) {
+        this.#denyEntryClaim(
+          this.#key(identity),
+          entry,
+          pluginId,
+          claim.activationKey,
+          claim.manifestDigest,
+          claim.leaseEpoch,
+        );
+      }
+      throw error;
+    }
   }
 
   /** Denies an exact current-generation claim and queues physical retirement in the background. */
@@ -148,10 +242,45 @@ export class PluginRuntimeRealms {
     const key = this.#key(identity);
     const entry = this.#entries.get(key);
     if (entry === undefined || entry.identity.generation !== identity.generation) return;
+    const claim = entry.realm.activeClaim(pluginId);
+    if (
+      claim?.activationKey !== activationKey ||
+      claim.manifestDigest !== manifestDigest
+    ) return;
+    this.#denyEntryClaim(
+      key,
+      entry,
+      pluginId,
+      activationKey,
+      manifestDigest,
+      claim.leaseEpoch,
+    );
+  }
+
+  /** Aborts a stale staged candidate without scheduling active lease retirement. */
+  denyStagedPlugin(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): void {
+    this.#assertWorkspace(identity);
+    const entry = this.#entries.get(this.#key(identity));
+    if (entry === undefined || entry.identity.generation !== identity.generation) return;
+    entry.realm.denyStagedPlugin(pluginId, activationKey, manifestDigest);
+  }
+
+  #denyEntryClaim(
+      key: string,
+      entry: RealmEntry,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string,
+      leaseEpoch: string): void {
     if (!entry.realm.denyPlugin(pluginId, activationKey, manifestDigest)) return;
     entry.refreshTail = entry.refreshTail.then(async () => {
       if (this.#entries.get(key) !== entry) return;
       try {
+        await entry.realm.removeRevokedPlugin(pluginId, leaseEpoch);
         await entry.realm.refresh();
       } catch (error) {
         this.#report(error);

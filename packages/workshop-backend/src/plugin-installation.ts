@@ -33,6 +33,91 @@ export interface PluginInstallationInput {
   config: PluginConfigurationValue;
 }
 
+/** Host-only owner authorization query derived from an exact local runtime gate. */
+export interface PluginRuntimeCapabilityClaim {
+  /** Explicit desired-state ownership scope. */
+  scope: "deployment" | "workspace" | "user";
+
+  /** Durable Object ID of the desired-state owner. */
+  targetId: string;
+
+  /** Stable installation lifecycle selected by the local gate. */
+  installationId: string;
+
+  /** Stable package identifier selected by the local gate. */
+  pluginId: string;
+
+  /** Immutable candidate or retained-active manifest digest. */
+  manifestDigest: string;
+
+  /** Exact host-supported capability being invoked. */
+  capability: string;
+
+  /** Staged candidates require exact digest; retained active versions may differ after update. */
+  phase: "staged" | "active";
+}
+
+/** Host-only staged candidate query derived from an exact local gate snapshot. */
+export interface PluginRuntimeCandidateClaim {
+  scope: "deployment" | "workspace" | "user";
+  targetId: string;
+  installationId: string;
+  pluginId: string;
+  packageVersion: string;
+  manifestDigest: string;
+  grantedCapabilities: string[];
+  config: PluginConfigurationValue;
+  stateRef?: string;
+}
+
+function pluginConfigurationEqual(left: PluginConfigurationValue, right: PluginConfigurationValue):
+    boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
+      left.every((value, index) => pluginConfigurationEqual(value, right[index]!));
+  }
+  if (
+    left === null || right === null ||
+    typeof left !== "object" || typeof right !== "object"
+  ) return false;
+  const leftEntries = Object.entries(left);
+  const rightEntries = Object.entries(right);
+  return leftEntries.length === rightEntries.length && leftEntries.every(([key, value]) =>
+    Object.hasOwn(right, key) && pluginConfigurationEqual(value, right[key]!));
+}
+
+/** Checks that a staged runtime still exactly represents current owner desired state. */
+export function isPluginRuntimeCandidateCurrent(
+    installation: PluginInstallationInput & {scope: string; targetId: string; stateRef?: string},
+    claim: PluginRuntimeCandidateClaim): boolean {
+  const currentGrants = new Set(installation.grantedCapabilities);
+  return installation.scope === claim.scope &&
+    installation.targetId === claim.targetId &&
+    installation.installationId === claim.installationId &&
+    installation.pluginId === claim.pluginId &&
+    installation.packageVersion === claim.packageVersion &&
+    installation.manifestDigest === claim.manifestDigest &&
+    installation.enabled &&
+    currentGrants.size === claim.grantedCapabilities.length &&
+    claim.grantedCapabilities.every(capability => currentGrants.has(capability)) &&
+    pluginConfigurationEqual(installation.config, claim.config) &&
+    installation.stateRef === claim.stateRef;
+}
+
+/** Checks current owner SSOT without letting an update revoke a safely retained old digest. */
+export function isPluginRuntimeCapabilityAuthorized(
+    installation: PluginInstallationInput & {scope: string; targetId: string},
+    claim: PluginRuntimeCapabilityClaim): boolean {
+  return installation.scope === claim.scope &&
+    installation.targetId === claim.targetId &&
+    installation.installationId === claim.installationId &&
+    installation.pluginId === claim.pluginId &&
+    installation.enabled &&
+    installation.grantedCapabilities.includes(claim.capability) &&
+    (claim.phase === "active" || installation.manifestDigest === claim.manifestDigest);
+}
+
 /** Desired state persisted by one UserDurableObject. */
 export interface UserPluginInstallation extends PluginInstallationInput {
   /** Schema version for the stored installation record. */
@@ -450,6 +535,9 @@ export interface UserPluginAuditEvent {
 export type PutUserPluginInstallationResult = {
   /** The desired state was persisted. */
   ok: true;
+
+  /** Existing lifecycle ID retained on update, or the host candidate accepted on first install. */
+  installationId: string;
 } | {
   /** The desired state was rejected without being persisted. */
   ok: false;

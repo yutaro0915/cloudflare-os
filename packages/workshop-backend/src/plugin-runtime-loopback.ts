@@ -1,6 +1,9 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { CollaboratorRole } from "@gadgets/workshop-shared/api";
 import type { PluginRuntimeRealmIdentity } from "./dynamic-worker-plugin-activator.js";
+import type { PluginWorkspaceMetadata } from "./plugin-runtime-capability-env.js";
+
+type PluginRuntimeClaimPhase = "staged" | "active" | "staged-or-active";
 
 /** Host-minted immutable authority claim captured in one Dynamic Worker Service Binding. */
 export interface PluginRuntimeLoopbackProps {
@@ -37,14 +40,14 @@ export interface PluginRuntimeLoopbackAuthorityHost {
   /** Verifies the exact current-generation local claim for the requested phase. */
   assertGate(
     props: PluginRuntimeLoopbackProps,
-    phase: "staged" | "active",
+    phase: PluginRuntimeClaimPhase,
   ): void | Promise<void>;
 }
 
 /** Enforces central denial before exact local staged/active authorization. */
 export async function assertPluginRuntimeLoopbackClaim(
     props: PluginRuntimeLoopbackProps,
-    phase: "staged" | "active",
+    phase: PluginRuntimeClaimPhase,
     host: PluginRuntimeLoopbackAuthorityHost): Promise<void> {
   if (await host.isManifestDenied(props.manifestDigest)) {
     try {
@@ -55,6 +58,43 @@ export async function assertPluginRuntimeLoopbackClaim(
     throw new Error("Plugin manifest is denied.");
   }
   await host.assertGate(props, phase);
+}
+
+/** Capability-specific binding exposed only to plugins granted workspace metadata read access. */
+export class PluginWorkspaceMetadataCapability
+    extends WorkerEntrypoint<Cloudflare.Env, PluginRuntimeLoopbackProps> {
+  /** Reads a minimal workspace snapshot after central and exact local authorization. */
+  async read(): Promise<PluginWorkspaceMetadata> {
+    const identity: PluginRuntimeRealmIdentity = {
+      overseerId: this.ctx.props.overseerId,
+      userId: this.ctx.props.userId,
+      role: this.ctx.props.role,
+      generation: this.ctx.props.generation,
+    };
+    const overseers = this.ctx.exports.OverseerDurableObject;
+    const overseer = overseers.get(overseers.idFromString(identity.overseerId));
+    let metadata: PluginWorkspaceMetadata | undefined;
+    await assertPluginRuntimeLoopbackClaim(this.ctx.props, "active", {
+      isManifestDenied: manifestDigest => this.ctx.exports.AdminSettings.getByName("")
+        .isPluginManifestDeniedForRuntimeHost(manifestDigest),
+      revokeDeniedClaim: props => overseer.revokeDeniedPluginRuntimeForHost(
+        identity,
+        props.pluginId,
+        props.activationKey,
+        props.manifestDigest,
+      ),
+      assertGate: async props => {
+        metadata = await overseer.readPluginWorkspaceMetadataForRuntimeHost(
+          identity,
+          props.pluginId,
+          props.activationKey,
+          props.manifestDigest,
+        );
+      },
+    });
+    if (metadata === undefined) throw new Error("Plugin workspace metadata was not returned.");
+    return metadata;
+  }
 }
 
 /** Stable loopback binding that re-enters the owning Overseer for every authority check. */
@@ -88,13 +128,26 @@ export class PluginRuntimeLoopback
         props.activationKey,
         props.manifestDigest,
       ),
-      assertGate: (props, claimPhase) => overseer.assertPluginRuntimeGateForHost(
-        identity,
-        props.pluginId,
-        props.activationKey,
-        props.manifestDigest,
-        claimPhase,
-      ),
+      assertGate: (props, claimPhase) => {
+        if (claimPhase === "staged-or-active") {
+          throw new Error("Lifecycle loopback requires an exact staged or active phase.");
+        }
+        if (claimPhase === "staged") {
+          return overseer.authorizeStagedPluginRuntimeForHost(
+            identity,
+            props.pluginId,
+            props.activationKey,
+            props.manifestDigest,
+          );
+        }
+        return overseer.assertPluginRuntimeGateForHost(
+          identity,
+          props.pluginId,
+          props.activationKey,
+          props.manifestDigest,
+          claimPhase,
+        );
+      },
     });
   }
 }

@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 const PASSWORD_HASH = new Uint8Array([1, 2, 3]);
 const MANIFEST_DIGEST =
   "sha256:c5ba5566a2a255b6a106f7d64fac442589da19e32fa0212b12e2f67e278fc75f";
+const UPDATED_MANIFEST_DIGEST =
+  "sha256:00504a35886ec267d7b82fe5dbe961c0619fdfe7c15f72991d30ee53379f5796";
 
 function username(prefix: string): string {
   return prefix + crypto.randomUUID().replaceAll("-", "");
@@ -89,6 +91,31 @@ describe("authenticated user plugin installation", () => {
     const owner = exports.UserDurableObject.getByName(account.username);
     await expect(owner.listUserPluginInstallations()).resolves.toEqual([]);
     await expect(owner.listUserPluginAuditEvents()).resolves.toEqual([]);
+  });
+
+  it("retains the installation lifecycle identity across an explicit version update", async () => {
+    using publicApi = await connect();
+    const account = await createAccount(publicApi, "pluginupdate");
+    using authenticated = await publicApi.authenticate(account.token);
+    const first = await authenticated.installUserPlugin({
+      pluginId: "test.notes",
+      packageVersion: "1.2.3",
+      approvedCapabilities: ["ui.panel", "agent.catalog.read"],
+    });
+    if (!first.ok) throw new Error("Expected initial plugin installation to succeed.");
+
+    await expect(authenticated.installUserPlugin({
+      pluginId: "test.notes",
+      packageVersion: "1.3.0",
+      approvedCapabilities: ["ui.panel"],
+    })).resolves.toEqual({ok: true, installationId: first.installationId});
+
+    const owner = exports.UserDurableObject.getByName(account.username);
+    await expect(owner.listUserPluginInstallations()).resolves.toMatchObject([{
+      installationId: first.installationId,
+      packageVersion: "1.3.0",
+      manifestDigest: UPDATED_MANIFEST_DIGEST,
+    }]);
   });
 
   it("rejects missing, extra, or duplicate capability approvals without persistence", async () => {

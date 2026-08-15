@@ -22,71 +22,79 @@ async function connect(): Promise<RpcStub<PublicApi>> {
 }
 
 describe("production plugin runtime loopback", () => {
-  it("defaults to deny before and after an owning Overseer reconstructs", async () => {
-    const overseerId = exports.OverseerDurableObject.newUniqueId().toString();
-    const props = {
-      overseerId,
-      userId: exports.UserDurableObject.newUniqueId().toString(),
-      role: "build" as const,
-      generation: crypto.randomUUID(),
-      pluginId: "test.runtime",
-      activationKey: `plugin-worker:v1:${"a".repeat(64)}`,
-      manifestDigest: `sha256:${"b".repeat(64)}`,
-    };
-
-    await expect(exports.PluginRuntimeLoopback({props}).verifyStaged())
-      .rejects.toThrow("Plugin runtime realm is unavailable");
-    await abortAllDurableObjects();
-    await expect(exports.PluginRuntimeLoopback({props}).assertActive())
-      .rejects.toThrow("Plugin runtime realm is unavailable");
-  });
-
-  it("keeps public workspace open while a verified v3 runtime reconciles", async () => {
+  it("reconciles, revokes, restores, and reconstructs one isolated capability", async () => {
     using publicApi = await connect();
-    const name = username("pluginruntime");
+    const name = username("pluginruntimegrantrevoke");
     const token = await publicApi.createAccount(name, name, PASSWORD_HASH);
-    if (token === null) throw new Error("Failed to create runtime test account.");
+    if (token === null) throw new Error("Failed to create grant revocation account.");
     using authenticated = await publicApi.authenticate(token);
     let workspaceId = "";
     {
       using workspace = await authenticated.newGadget();
+      await workspace.setTitle("Capability Workspace");
       workspaceId = (await workspace.getMetadata()).id;
     }
-    await expect(authenticated.installUserPlugin({
-      pluginId: "test.runtime",
+    const first = await authenticated.installUserPlugin({
+      pluginId: "test.runtime-metadata",
       packageVersion: "1.0.0",
-      approvedCapabilities: [],
-    })).resolves.toMatchObject({ok: true});
+      approvedCapabilities: ["workspace.metadata.read"],
+    });
+    if (!first.ok) throw new Error("Expected initial capability installation to succeed.");
 
     const userId = exports.UserDurableObject.idFromName(name).toString();
     const workspaceHost = exports.OverseerDurableObject.get(
       exports.OverseerDurableObject.idFromString(workspaceId),
     );
-    const reopened = authenticated.openGadget(workspaceId);
-    await expect(reopened.getMetadata()).resolves.toMatchObject({
-      id: workspaceId,
-      role: "build",
-    });
-    await expect(workspaceHost.assertPluginRuntimeLoopbackActiveForHost(
-      userId, "build", "test.runtime",
+    const firstSession = authenticated.openGadget(workspaceId);
+    await firstSession.getMetadata();
+    await expect(workspaceHost.assertPluginWorkspaceMetadataCapabilityForHost(
+      userId, "build", "test.runtime-metadata",
     )).resolves.toBeUndefined();
 
-    reopened[Symbol.dispose]();
+    await expect(authenticated.installUserPlugin({
+      pluginId: "test.runtime-metadata",
+      packageVersion: "2.0.0",
+      approvedCapabilities: [],
+    })).resolves.toEqual({ok: true, installationId: first.installationId});
+    using refreshSession = authenticated.openGadget(workspaceId);
+    await refreshSession.getMetadata();
+
+    await expect(workspaceHost.assertPluginWorkspaceMetadataCapabilityForHost(
+      userId, "build", "test.runtime-metadata",
+    )).rejects.toThrow("Plugin runtime capability is no longer authorized");
     await expect(workspaceHost.assertPluginRuntimeActiveForHost(
-      userId, "build", "test.runtime",
+      userId, "build", "test.runtime-metadata",
+    )).rejects.toThrow("Plugin runtime plugin is inactive");
+
+    await expect(authenticated.installUserPlugin({
+      pluginId: "test.runtime-metadata",
+      packageVersion: "1.0.0",
+      approvedCapabilities: ["workspace.metadata.read"],
+    })).resolves.toEqual({ok: true, installationId: first.installationId});
+    using recoveredSession = authenticated.openGadget(workspaceId);
+    await recoveredSession.getMetadata();
+    await expect(workspaceHost.assertPluginWorkspaceMetadataCapabilityForHost(
+      userId, "build", "test.runtime-metadata",
+    )).resolves.toBeUndefined();
+
+    recoveredSession[Symbol.dispose]();
+    refreshSession[Symbol.dispose]();
+    firstSession[Symbol.dispose]();
+    await expect(workspaceHost.assertPluginWorkspaceMetadataCapabilityForHost(
+      userId, "build", "test.runtime-metadata",
     )).rejects.toThrow("Plugin runtime realm is unavailable");
 
     const beforeRestart = authenticated.openGadget(workspaceId);
     await beforeRestart.getMetadata();
-    await expect(workspaceHost.assertPluginRuntimeLoopbackActiveForHost(
-      userId, "build", "test.runtime",
+    await expect(workspaceHost.assertPluginWorkspaceMetadataCapabilityForHost(
+      userId, "build", "test.runtime-metadata",
     )).resolves.toBeUndefined();
     await abortAllDurableObjects();
     const reconstructed = exports.OverseerDurableObject.get(
       exports.OverseerDurableObject.idFromString(workspaceId),
     );
-    await expect(reconstructed.assertPluginRuntimeActiveForHost(
-      userId, "build", "test.runtime",
+    await expect(reconstructed.assertPluginWorkspaceMetadataCapabilityForHost(
+      userId, "build", "test.runtime-metadata",
     )).rejects.toThrow("Plugin runtime realm is unavailable");
     beforeRestart[Symbol.dispose]();
   });

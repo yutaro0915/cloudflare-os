@@ -46,7 +46,8 @@ class RecordingActivator implements PluginExecutionActivator {
   failCleanupLabel?: string;
   receivedPrevious = false;
 
-  async prepare(candidate: RuntimePluginPlan, addCleanup: (label: string, step: () =>
+  async prepare(candidate: RuntimePluginPlan, _activationAttemptId: string,
+      addCleanup: (label: string, step: () =>
       void | Promise<void>) => void) {
     const version = candidate.installation.packageVersion;
     for (const label of ["A", "B", "C"]) {
@@ -80,11 +81,12 @@ describe("Cordis plugin runtime adapter", () => {
     const activator = new RecordingActivator();
     const debts = new RecordingDebtObserver();
     const adapter = new CordisPluginRuntimeAdapter(activator, debts);
-    const previous = await adapter.replace(plan("1.0.0"));
+    const previous = await adapter.replace(plan("1.0.0"), "attempt-v1");
     activator.events.length = 0;
     activator.failPrepare = true;
 
-    await expect(adapter.replace(plan("2.0.0"), previous)).rejects.toThrow("prepare failed");
+    await expect(adapter.replace(plan("2.0.0"), "attempt-v2", previous))
+      .rejects.toThrow("prepare failed");
 
     expect(activator.selectedVersion).toBe("1.0.0");
     expect(activator.events).toEqual([
@@ -99,12 +101,13 @@ describe("Cordis plugin runtime adapter", () => {
     const activator = new RecordingActivator();
     const debts = new RecordingDebtObserver();
     const adapter = new CordisPluginRuntimeAdapter(activator, debts);
-    const previous = await adapter.replace(plan("1.0.0"));
+    const previous = await adapter.replace(plan("1.0.0"), "attempt-v1");
     activator.events.length = 0;
     activator.failPrepare = true;
     activator.failCleanupLabel = "B";
 
-    await expect(adapter.replace(plan("2.0.0"), previous)).rejects.toThrow("prepare failed");
+    await expect(adapter.replace(plan("2.0.0"), "attempt-v2", previous))
+      .rejects.toThrow("prepare failed");
 
     expect(activator.selectedVersion).toBe("1.0.0");
     expect(adapter.pendingLocalCleanupDebtCount).toBe(1);
@@ -121,11 +124,12 @@ describe("Cordis plugin runtime adapter", () => {
   it("aborts and cleans a candidate when commit fails without changing previous selection", async () => {
     const activator = new RecordingActivator();
     const adapter = new CordisPluginRuntimeAdapter(activator, new RecordingDebtObserver());
-    const previous = await adapter.replace(plan("1.0.0"));
+    const previous = await adapter.replace(plan("1.0.0"), "attempt-v1");
     activator.events.length = 0;
     activator.failCommit = true;
 
-    await expect(adapter.replace(plan("2.0.0"), previous)).rejects.toThrow("commit failed");
+    await expect(adapter.replace(plan("2.0.0"), "attempt-v2", previous))
+      .rejects.toThrow("commit failed");
 
     expect(activator.selectedVersion).toBe("1.0.0");
     expect(activator.events).toEqual([
@@ -141,11 +145,12 @@ describe("Cordis plugin runtime adapter", () => {
     const activator = new RecordingActivator();
     const debts = new RecordingDebtObserver();
     const adapter = new CordisPluginRuntimeAdapter(activator, debts);
-    const previous = await adapter.replace(plan("1.0.0"));
+    const previous = await adapter.replace(plan("1.0.0"), "attempt-v1");
     activator.events.length = 0;
     activator.failCleanupLabel = "B";
 
-    const current = await adapter.replace(plan("2.0.0"), previous);
+    const current = await adapter.replace(plan("2.0.0"), "attempt-v2", previous);
+    expect(current.activationAttemptId).toBe("attempt-v2");
 
     expect(activator.selectedVersion).toBe("2.0.0");
     expect(activator.receivedPrevious).toBe(true);
@@ -171,7 +176,7 @@ describe("Cordis plugin runtime adapter", () => {
   it("revokes routing before cleanup when removing an active lease", async () => {
     const activator = new RecordingActivator();
     const adapter = new CordisPluginRuntimeAdapter(activator, new RecordingDebtObserver());
-    const lease = await adapter.replace(plan());
+    const lease = await adapter.replace(plan(), "attempt-v1");
     activator.events.length = 0;
 
     await adapter.remove(lease);
@@ -188,7 +193,7 @@ describe("Cordis plugin runtime adapter", () => {
   it("leaves the lease selected and retryable when logical revocation fails", async () => {
     const activator = new RecordingActivator();
     const adapter = new CordisPluginRuntimeAdapter(activator, new RecordingDebtObserver());
-    const lease = await adapter.replace(plan());
+    const lease = await adapter.replace(plan(), "attempt-v1");
     activator.events.length = 0;
     activator.failRevoke = true;
 
@@ -205,7 +210,7 @@ describe("Cordis plugin runtime adapter", () => {
     const activator = new RecordingActivator();
     const observer = new RecordingDebtObserver();
     const adapter = new CordisPluginRuntimeAdapter(activator, observer);
-    const lease = await adapter.replace(plan());
+    const lease = await adapter.replace(plan(), "attempt-v1");
     activator.events.length = 0;
     activator.failCleanupLabel = "B";
     observer.fail = true;

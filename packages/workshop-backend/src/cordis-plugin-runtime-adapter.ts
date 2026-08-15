@@ -33,6 +33,7 @@ export interface PluginExecutionActivator {
    */
   prepare(
     candidate: RuntimePluginPlan,
+    activationAttemptId: string,
     addCleanup: (label: string, step: PluginCleanupStep) => void,
   ): Promise<PreparedPluginExecution>;
 }
@@ -70,6 +71,9 @@ export interface PluginLocalCleanupDebtObserver {
 export interface CordisPluginRuntimeLease {
   /** Data-only plan represented by this lease. */
   plan: RuntimePluginPlan;
+
+  /** Opaque activation token shared with the gate and reconciler active entry. */
+  activationAttemptId: string;
 
   /** Cordis lifecycle for the trusted bridge plugin. */
   fiber: Fiber;
@@ -112,12 +116,14 @@ implements PluginRuntimeAdapter<CordisPluginRuntimeLease> {
 
   async replace(
       candidate: RuntimePluginPlan,
+      activationAttemptId: string,
       previous?: CordisPluginRuntimeLease): Promise<CordisPluginRuntimeLease> {
     const cleanup = new RetryableCleanupController();
     let prepared: PreparedPluginExecution | undefined;
     const fiber = this.#context.plugin(async () => {
       prepared = await this.activator.prepare(
         candidate,
+        activationAttemptId,
         (label, step) => cleanup.add(label, step),
       );
       return () => cleanup.run().then(() => undefined);
@@ -151,7 +157,13 @@ implements PluginRuntimeAdapter<CordisPluginRuntimeLease> {
         previous.cleanup,
       );
     }
-    return {plan: structuredClone(candidate), fiber, execution, cleanup};
+    return {
+      plan: structuredClone(candidate),
+      activationAttemptId,
+      fiber,
+      execution,
+      cleanup,
+    };
   }
 
   async remove(active: CordisPluginRuntimeLease): Promise<void> {

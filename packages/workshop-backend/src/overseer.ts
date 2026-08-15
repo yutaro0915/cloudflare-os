@@ -60,11 +60,19 @@ import {
 import { PluginRuntimeRealms, type PluginRuntimeRealmSession } from "./plugin-runtime-realms.js";
 import { ReconciledPluginRuntimeRealm } from "./reconciled-plugin-runtime-realm.js";
 import {
+  makePluginRuntimeCapabilityEnv,
+  type PluginWorkspaceMetadata,
+} from "./plugin-runtime-capability-env.js";
+import {
   decodePluginRuntimePolicySnapshot,
   decodeUserPluginInstallationSnapshot,
+  isPluginRuntimeCapabilityAuthorized,
+  isPluginRuntimeCandidateCurrent,
   resolveApprovedPluginManifest,
   type DeploymentPluginInstallationRecord,
   type UserPluginInstallation,
+  type PluginRuntimeCapabilityClaim,
+  type PluginRuntimeCandidateClaim,
   type WorkspacePluginAuditEvent,
   type WorkspacePluginInstallationRecord,
 } from "./plugin-installation.js";
@@ -1454,17 +1462,16 @@ class OverseerImpl implements AgentHooks {
       manifests: bundledPluginManifestResolver,
       artifacts: bundledPluginCodeArtifactResolver,
       starter: new WorkerLoaderPluginWorkerStarter(this.env.LOADER),
-      makeCapabilityEnv: (plan, activationKey) => ({
-        PLUGIN_HOST: this.ctx.exports.PluginRuntimeLoopback({props: {
-          overseerId: identity.overseerId,
-          userId: identity.userId,
-          role: identity.role,
-          generation: identity.generation,
-          pluginId: plan.installation.pluginId,
-          activationKey,
-          manifestDigest: plan.installation.manifestDigest,
-        }}),
-      }),
+      makeCapabilityEnv: (plan, activationKey) => makePluginRuntimeCapabilityEnv(
+        identity,
+        plan,
+        activationKey,
+        {
+          pluginHost: props => this.ctx.exports.PluginRuntimeLoopback({props}),
+          workspaceMetadata: props =>
+            this.ctx.exports.PluginWorkspaceMetadataCapability({props}),
+        },
+      ),
     });
   }
 
@@ -6553,6 +6560,112 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     );
   }
 
+  /** Revalidates an exact staged candidate against owner SSOT before it may commit. */
+  async authorizeStagedPluginRuntimeForHost(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): Promise<void> {
+    const authority = this.impl.pluginRuntimeRealms.stagedInstallationAuthority(
+      identity, pluginId, activationKey, manifestDigest,
+    );
+    if (authority === undefined) throw new Error("Plugin runtime gate denied.");
+    const installation = authority.installation;
+    const claim: PluginRuntimeCandidateClaim = {
+      scope: installation.scope,
+      targetId: installation.targetId,
+      installationId: installation.installationId,
+      pluginId: installation.pluginId,
+      packageVersion: installation.packageVersion,
+      manifestDigest: installation.manifestDigest,
+      grantedCapabilities: [...installation.grantedCapabilities],
+      config: structuredClone(installation.config),
+      ...(installation.stateRef === undefined ? {} : {stateRef: installation.stateRef}),
+    };
+    let authorized = false;
+    if (claim.scope === "workspace") {
+      const current = this.impl.storage.workspacePluginInstallations.get(claim.pluginId);
+      authorized = claim.targetId === this.ctx.id.toString() && current !== undefined &&
+        isPluginRuntimeCandidateCurrent(current, claim);
+    } else if (claim.scope === "user") {
+      authorized = claim.targetId === identity.userId &&
+        await this.impl.users.get(this.impl.users.idFromString(claim.targetId))
+          .authorizePluginCandidateForRuntimeHost(claim);
+    } else {
+      const adminSettings = this.ctx.exports.AdminSettings.getByName("");
+      authorized = claim.targetId === adminSettings.id.toString() &&
+        await adminSettings.authorizePluginCandidateForRuntimeHost(claim);
+    }
+    if (!authorized || this.impl.pluginRuntimeRealms.stagedInstallationAuthority(
+      identity, pluginId, activationKey, manifestDigest,
+    ) === undefined) {
+      this.impl.pluginRuntimeRealms.denyStagedPlugin(
+        identity, pluginId, activationKey, manifestDigest,
+      );
+      throw new Error("Plugin runtime candidate is no longer current.");
+    }
+  }
+
+  /** Revalidates owner SSOT and an exact active grant before returning minimal metadata. */
+  async readPluginWorkspaceMetadataForRuntimeHost(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): Promise<PluginWorkspaceMetadata> {
+    const authority = this.impl.pluginRuntimeRealms.activeCapabilityAuthority(
+      identity,
+      pluginId,
+      activationKey,
+      manifestDigest,
+      "workspace.metadata.read",
+    );
+    if (authority === undefined) throw new Error("Plugin runtime capability denied.");
+    const installation = authority.installation;
+    const claim: PluginRuntimeCapabilityClaim = {
+      scope: installation.scope,
+      targetId: installation.targetId,
+      installationId: installation.installationId,
+      pluginId: installation.pluginId,
+      manifestDigest: installation.manifestDigest,
+      capability: "workspace.metadata.read",
+      phase: authority.phase,
+    };
+    let authorized = false;
+    if (claim.scope === "workspace") {
+      const current = this.impl.storage.workspacePluginInstallations.get(claim.pluginId);
+      authorized = claim.targetId === this.ctx.id.toString() && current !== undefined &&
+        isPluginRuntimeCapabilityAuthorized(current, claim);
+    } else if (claim.scope === "user") {
+      authorized = claim.targetId === identity.userId &&
+        await this.impl.users.get(this.impl.users.idFromString(claim.targetId))
+          .authorizePluginCapabilityForRuntimeHost(claim);
+    } else {
+      const adminSettings = this.ctx.exports.AdminSettings.getByName("");
+      authorized = claim.targetId === adminSettings.id.toString() &&
+        await adminSettings.authorizePluginCapabilityForRuntimeHost(claim);
+    }
+    if (!authorized) {
+      this.impl.pluginRuntimeRealms.denyPlugin(
+        identity, pluginId, activationKey, manifestDigest,
+      );
+      throw new Error("Plugin runtime capability is no longer authorized.");
+    }
+    if (this.impl.pluginRuntimeRealms.activeCapabilityAuthority(
+      identity,
+      pluginId,
+      activationKey,
+      manifestDigest,
+      "workspace.metadata.read",
+    ) === undefined) {
+      throw new Error("Plugin runtime capability denied.");
+    }
+    return Object.freeze({
+      workspaceId: this.ctx.id.toString(),
+      title: this.impl.storage.title.get(),
+      role: identity.role,
+    });
+  }
+
   /** Asserts bounded host operational health without returning runtime authority material. */
   assertPluginRuntimeActiveForHost(
       userId: string,
@@ -6580,6 +6693,18 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
       ...claim,
       pluginId,
     }}).assertActive();
+  }
+
+  /** Invokes the real metadata facade without trusting or returning untrusted plugin output. */
+  async assertPluginWorkspaceMetadataCapabilityForHost(
+      userId: string,
+      role: CollaboratorRole,
+      pluginId: string): Promise<void> {
+    await this.impl.pluginRuntimeRealms.assertWorkspaceMetadataCapability({
+      overseerId: this.ctx.id.toString(),
+      userId,
+      role,
+    }, pluginId);
   }
 
   /** Immediately denies an exact policy-rejected claim and queues local forced reconciliation. */

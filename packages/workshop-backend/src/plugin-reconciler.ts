@@ -30,13 +30,13 @@ export type RuntimePluginPreflightFailure = RuntimePluginPreflightFailureBase & 
   /** Stable failure derived from exact immutable manifest verification. */
   reason:
     "MANIFEST_NOT_FOUND" | "MANIFEST_INTEGRITY_MISMATCH" |
-    "RUNTIME_ARTIFACT_NOT_DECLARED";
+    "RUNTIME_ARTIFACT_NOT_DECLARED" | "CAPABILITY_UNSUPPORTED";
 } | {
   /** Deployment safety policy requires an old runtime with this digest to stop. */
   retention: "forbidden";
 
   /** Permanent deployment denial of this immutable manifest digest. */
-  reason: "MANIFEST_DENYLISTED";
+  reason: "MANIFEST_DENYLISTED" | "RUNTIME_AUTHORITY_REVOKED";
 });
 
 /** Runtime boundary that atomically replaces or removes one isolated plugin activation. */
@@ -46,7 +46,11 @@ export interface PluginRuntimeAdapter<Lease> {
    * candidate is logically revoked, isolate-local cleanup debt remains owned by the adapter, and
    * `previous` remains selected.
    */
-  replace(candidate: RuntimePluginPlan, previous?: Lease): Promise<Lease>;
+  replace(
+    candidate: RuntimePluginPlan,
+    activationAttemptId: string,
+    previous?: Lease,
+  ): Promise<Lease>;
 
   /**
    * Logically revokes `active` before teardown. It rejects only when revocation failed and the
@@ -151,6 +155,7 @@ export type PluginReconciliationResult = {
 interface ActivePlugin<Lease> {
   plan: RuntimePluginPlan;
   lease: Lease;
+  leaseEpoch: string;
 }
 
 function identity(installation: EffectivePluginInstallation): RuntimePluginIdentity {
@@ -215,6 +220,7 @@ function findCyclicPluginIds(plans: ReadonlyMap<string, RuntimePluginPlan>): Set
 /** Rebuildable, Cordis-independent state machine over the plugin runtime adapter port. */
 export class PluginReconciler<Lease> {
   readonly #active = new Map<string, ActivePlugin<Lease>>();
+  readonly #invalidatedLeaseEpochs = new Map<string, string>();
   #reconciliationTail = Promise.resolve();
 
   /** Creates an empty runtime projection that will be rebuilt from desired state. */
@@ -223,7 +229,10 @@ export class PluginReconciler<Lease> {
   /** Applies one desired snapshot and returns plain state without exposing runtime leases. */
   reconcile(input: PluginReconciliationInput): Promise<PluginReconciliationResult> {
     const snapshot = structuredClone(input);
-    const run = this.#reconciliationTail.then(() => this.#apply(snapshot));
+    const run = this.#reconciliationTail.then(async () => {
+      await this.#retryInvalidatedLeases();
+      return this.#apply(this.#fenceInvalidatedLeases(snapshot));
+    });
     this.#reconciliationTail = run.then(() => undefined, () => undefined);
     return run;
   }
@@ -249,6 +258,87 @@ export class PluginReconciler<Lease> {
     });
     this.#reconciliationTail = run.then(() => undefined, () => undefined);
     return run;
+  }
+
+  /** Force-removes one exact active lease after its logical host authority was revoked. */
+  invalidateActive(pluginId: string, expectedLeaseEpoch: string): Promise<PluginReconciliationResult> {
+    const run = this.#reconciliationTail.then(async () => {
+      const current = this.#active.get(pluginId);
+      if (current?.leaseEpoch !== expectedLeaseEpoch) {
+        return this.#apply({
+          ok: true,
+          plans: Array.from(this.#active.values(), active => active.plan),
+        });
+      }
+      this.#invalidatedLeaseEpochs.set(pluginId, expectedLeaseEpoch);
+      const result = await this.#applyInvalidatedLease(pluginId, expectedLeaseEpoch);
+      this.#clearSettledInvalidation(pluginId, expectedLeaseEpoch);
+      return result;
+    });
+    this.#reconciliationTail = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  /** Returns the opaque epoch of the exact active reconciler lease. */
+  activeLeaseEpoch(pluginId: string): string | undefined {
+    return this.#active.get(pluginId)?.leaseEpoch;
+  }
+
+  async #retryInvalidatedLeases(): Promise<void> {
+    for (const [pluginId, leaseEpoch] of this.#invalidatedLeaseEpochs) {
+      await this.#applyInvalidatedLease(pluginId, leaseEpoch);
+      this.#clearSettledInvalidation(pluginId, leaseEpoch);
+    }
+  }
+
+  #clearSettledInvalidation(pluginId: string, leaseEpoch: string): void {
+    if (this.#active.get(pluginId)?.leaseEpoch !== leaseEpoch) {
+      this.#invalidatedLeaseEpochs.delete(pluginId);
+    }
+  }
+
+  #applyInvalidatedLease(
+      pluginId: string,
+      leaseEpoch: string): Promise<PluginReconciliationResult> {
+    const current = this.#active.get(pluginId);
+    if (current?.leaseEpoch !== leaseEpoch) {
+      return this.#apply({
+        ok: true,
+        plans: Array.from(this.#active.values(), active => active.plan),
+      });
+    }
+    return this.#apply({
+      ok: true,
+      plans: Array.from(this.#active.entries())
+        .filter(([currentPluginId]) => currentPluginId !== pluginId)
+        .map(([, active]) => active.plan),
+      preflightFailures: [{
+        installation: current.plan.installation,
+        retention: "forbidden",
+        reason: "RUNTIME_AUTHORITY_REVOKED",
+      }],
+    });
+  }
+
+  #fenceInvalidatedLeases(input: PluginReconciliationInput): PluginReconciliationInput {
+    if (!input.ok || this.#invalidatedLeaseEpochs.size === 0) return input;
+    const blockedPluginIds = new Set(this.#invalidatedLeaseEpochs.keys());
+    const preflightFailures = [...(input.preflightFailures ?? [])];
+    for (const pluginId of blockedPluginIds) {
+      const current = this.#active.get(pluginId);
+      if (current !== undefined) {
+        preflightFailures.push({
+          installation: current.plan.installation,
+          retention: "forbidden",
+          reason: "RUNTIME_AUTHORITY_REVOKED",
+        });
+      }
+    }
+    return {
+      ok: true,
+      plans: input.plans.filter(plan => !blockedPluginIds.has(plan.installation.pluginId)),
+      preflightFailures,
+    };
   }
 
   async #apply(input: PluginReconciliationInput): Promise<PluginReconciliationResult> {
@@ -298,7 +388,8 @@ export class PluginReconciler<Lease> {
           state.reason === "CYCLIC_DEPENDENCY" ||
           state.reason === "MANIFEST_NOT_FOUND" ||
           state.reason === "MANIFEST_INTEGRITY_MISMATCH" ||
-          state.reason === "RUNTIME_ARTIFACT_NOT_DECLARED"
+          state.reason === "RUNTIME_ARTIFACT_NOT_DECLARED" ||
+          state.reason === "CAPABILITY_UNSUPPORTED"
         ));
       if (
         isConditionalCandidate &&
@@ -391,8 +482,13 @@ export class PluginReconciler<Lease> {
         return;
       }
       try {
-        const lease = await this.runtime.replace(plan, current?.lease);
-        this.#active.set(plan.installation.pluginId, {plan, lease});
+        const leaseEpoch = crypto.randomUUID();
+        const lease = await this.runtime.replace(plan, leaseEpoch, current?.lease);
+        this.#active.set(plan.installation.pluginId, {
+          plan,
+          lease,
+          leaseEpoch,
+        });
         statesByPluginId.set(pluginId, {
           pluginId: plan.installation.pluginId,
           status: "active",

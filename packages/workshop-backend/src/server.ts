@@ -23,7 +23,10 @@ import { BlueprintKvRecord, buildBlueprintArchiveStream, sanitizeBlueprintOutput
 import { GatekeeperConnectCallbackImpl, normalizeUsername, UserDurableObject, CLOUDFLARE_VENDOR_ID } from "./user";
 import { createSkillDefinition } from "./agent-definition";
 import { OverseerDurableObject, GatekeeperLoopback, CodeModeTailLoopback, AgentSpawnerGatekeeper, GatekeeperHookLoopback, GadgetTailLoopback, AgentSelfLoopback, TransientStubLoopback } from "./overseer";
-import { PluginRuntimeLoopback } from "./plugin-runtime-loopback.js";
+import {
+  PluginRuntimeLoopback,
+  PluginWorkspaceMetadataCapability,
+} from "./plugin-runtime-loopback.js";
 import { ExternalMessageGateway } from "./external-message-gateway";
 import { RpcStub as NativeRpcStub } from "cloudflare:workers";
 import { recordAnalytics } from "./analytics";
@@ -65,7 +68,7 @@ export { OverseerDurableObject, GatekeeperLoopback, GatekeeperHookLoopback,
     AgentSelfLoopback, TransientStubLoopback };
 
 // Re-export the installation-scoped Dynamic Worker authority loopback.
-export { PluginRuntimeLoopback };
+export { PluginRuntimeLoopback, PluginWorkspaceMetadataCapability };
 
 // Re-export service-binding entrypoint for external channel integrations.
 export { ExternalMessageGateway };
@@ -140,7 +143,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     if (!result.ok) {
       throw new Error("Verified plugin manifest was rejected by UserDurableObject.");
     }
-    return {ok: true, installationId};
+    return {ok: true, installationId: result.installationId};
   }
   setOwnDisplayName(name: string): Promise<void> {
     return this.user.setOwnDisplayName(name);

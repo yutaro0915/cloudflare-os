@@ -17,6 +17,10 @@ import { createSkillDefinition, validateAgentDefinition, validateSkillDefinition
 import {
   isCanonicalPluginManifestDigest,
   type PutUserPluginInstallationResult,
+  type PluginRuntimeCapabilityClaim,
+  isPluginRuntimeCapabilityAuthorized,
+  isPluginRuntimeCandidateCurrent,
+  type PluginRuntimeCandidateClaim,
   type UserPluginAuditEvent,
   type UserPluginInstallation,
   type PluginInstallationInput,
@@ -656,6 +660,23 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     return Array.from(this.storage.pluginInstallations.list());
   }
 
+  /** Checks one exact runtime capability against this user's current desired installation. */
+  async authorizePluginCapabilityForRuntimeHost(
+      claim: PluginRuntimeCapabilityClaim): Promise<boolean> {
+    if (claim.scope !== "user" || claim.targetId !== this.ctx.id.toString()) return false;
+    const installation = this.storage.pluginInstallations.get(claim.pluginId);
+    return installation !== undefined &&
+      isPluginRuntimeCapabilityAuthorized(installation, claim);
+  }
+
+  /** Checks an exact staged candidate against this user's current desired installation. */
+  async authorizePluginCandidateForRuntimeHost(
+      claim: PluginRuntimeCandidateClaim): Promise<boolean> {
+    if (claim.scope !== "user" || claim.targetId !== this.ctx.id.toString()) return false;
+    const installation = this.storage.pluginInstallations.get(claim.pluginId);
+    return installation !== undefined && isPluginRuntimeCandidateCurrent(installation, claim);
+  }
+
   /** Lists host-owned plugin audit events in append order. */
   async listUserPluginAuditEvents(): Promise<UserPluginAuditEvent[]> {
     return Array.from(this.storage.pluginAuditEvents.list());
@@ -667,19 +688,22 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     if (!isCanonicalPluginManifestDigest(input.manifestDigest)) {
       return {ok: false, error: "INVALID_MANIFEST_DIGEST"};
     }
-    const installation: UserPluginInstallation = {
-      schemaVersion: 1,
-      installationId: input.installationId,
-      scope: "user",
-      targetId: this.ctx.id.toString(),
-      pluginId: input.pluginId,
-      packageVersion: input.packageVersion,
-      manifestDigest: input.manifestDigest,
-      enabled: input.enabled,
-      grantedCapabilities: input.grantedCapabilities,
-      config: input.config,
-    };
+    let installationId = "";
     this.ctx.storage.transactionSync(() => {
+      const existing = this.storage.pluginInstallations.get(input.pluginId);
+      const installation: UserPluginInstallation = {
+        schemaVersion: 1,
+        installationId: existing?.installationId ?? input.installationId,
+        scope: "user",
+        targetId: this.ctx.id.toString(),
+        pluginId: input.pluginId,
+        packageVersion: input.packageVersion,
+        manifestDigest: input.manifestDigest,
+        enabled: input.enabled,
+        grantedCapabilities: [...input.grantedCapabilities],
+        config: structuredClone(input.config),
+        ...(existing?.stateRef === undefined ? {} : {stateRef: existing.stateRef}),
+      };
       const sequence = this.storage.nextPluginAuditSequence.get();
       const event: UserPluginAuditEvent = {
         schemaVersion: 1,
@@ -699,8 +723,9 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       this.storage.pluginInstallations.put(installation);
       this.storage.pluginAuditEvents.put(event);
       this.storage.nextPluginAuditSequence.put(sequence + 1);
+      installationId = installation.installationId;
     });
-    return {ok: true};
+    return {ok: true, installationId};
   }
 
   async listSkillDefinitions(): Promise<SkillDefinition[]> {

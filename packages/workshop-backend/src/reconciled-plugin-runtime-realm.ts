@@ -10,11 +10,17 @@ import {
 import type { EffectivePluginConfigurationInput } from "./plugin-effective-configuration.js";
 import { resolveEffectivePluginConfiguration } from "./plugin-effective-configuration.js";
 import { InMemoryPluginCapabilityGateRegistry } from "./plugin-capability-gate.js";
-import type { PluginRuntimeGateClaim } from "./plugin-capability-gate.js";
+import type {
+  PluginCapabilityAuthority,
+  PluginStagedInstallationAuthority,
+} from "./plugin-capability-gate.js";
 import type { VerifyingPluginCodeArtifactResolver } from "./plugin-code-artifact.js";
 import type { PluginManifestResolver } from "./plugin-manifest-registry.js";
 import { PluginReconciler, type RuntimePluginPlan } from "./plugin-reconciler.js";
-import type { PluginRuntimeRealm } from "./plugin-runtime-realms.js";
+import type {
+  PluginRuntimeLeaseClaim,
+  PluginRuntimeRealm,
+} from "./plugin-runtime-realms.js";
 import { buildRuntimePluginPlans } from "./plugin-runtime-plan.js";
 
 /** Atomic trusted control snapshot read before one realm reconciliation pass. */
@@ -74,6 +80,7 @@ async function withinDeadline<T>(
 /** Deep realm host that owns three-scope resolution, reconciliation, Cordis, and gate lifecycle. */
 export class ReconciledPluginRuntimeRealm implements PluginRuntimeRealm {
   readonly #gates: InMemoryPluginCapabilityGateRegistry;
+  readonly #activator: DynamicWorkerPluginExecutionActivator;
   readonly #runtime: CordisPluginRuntimeAdapter;
   readonly #reconciler: PluginReconciler<CordisPluginRuntimeLease>;
   #refreshTail = Promise.resolve();
@@ -84,13 +91,13 @@ export class ReconciledPluginRuntimeRealm implements PluginRuntimeRealm {
     this.#gates = new InMemoryPluginCapabilityGateRegistry(
       (plan, activationKey) => options.makeCapabilityEnv(plan, activationKey),
     );
-    const activator = new DynamicWorkerPluginExecutionActivator(
+    this.#activator = new DynamicWorkerPluginExecutionActivator(
       options.identity,
       options.starter,
       options.artifacts,
       this.#gates,
     );
-    this.#runtime = new CordisPluginRuntimeAdapter(activator);
+    this.#runtime = new CordisPluginRuntimeAdapter(this.#activator);
     this.#reconciler = new PluginReconciler(this.#runtime);
     this.#refreshTimeoutMs = options.refreshTimeoutMs ?? 15_000;
   }
@@ -116,21 +123,59 @@ export class ReconciledPluginRuntimeRealm implements PluginRuntimeRealm {
       activationKey: string,
       manifestDigest: string,
       phase: "staged" | "active"): void {
+    const active = this.#gates.activeClaim(pluginId);
     const allowed = phase === "staged"
       ? this.#gates.isStaged(pluginId, activationKey, manifestDigest)
-      : this.#gates.isActive(pluginId, activationKey, manifestDigest);
+      : active?.activationKey === activationKey &&
+        active.manifestDigest === manifestDigest &&
+        active.leaseEpoch === this.#reconciler.activeLeaseEpoch(pluginId);
     if (!allowed) throw new Error("Plugin runtime gate denied.");
   }
 
   assertPluginActive(pluginId: string): void {
-    if (!this.#gates.hasActivePlugin(pluginId)) {
+    const active = this.#gates.activeClaim(pluginId);
+    if (
+      active === undefined ||
+      active.leaseEpoch !== this.#reconciler.activeLeaseEpoch(pluginId)
+    ) {
       throw new Error("Plugin runtime plugin is inactive.");
     }
   }
 
+  activeCapabilityAuthority(
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string,
+      capability: string): PluginCapabilityAuthority | undefined {
+    const authority = this.#gates.capabilityAuthority(
+      pluginId, activationKey, manifestDigest, capability, "active",
+    );
+    return authority?.leaseEpoch === this.#reconciler.activeLeaseEpoch(pluginId)
+      ? authority
+      : undefined;
+  }
+
+  stagedInstallationAuthority(
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): PluginStagedInstallationAuthority | undefined {
+    return this.#gates.stagedInstallationAuthority(pluginId, activationKey, manifestDigest);
+  }
+
   /** Returns an owned exact active claim for trusted host loopback diagnostics. */
-  activeClaim(pluginId: string): PluginRuntimeGateClaim | undefined {
-    return this.#gates.activeClaim(pluginId);
+  activeClaim(pluginId: string): PluginRuntimeLeaseClaim | undefined {
+    const claim = this.#gates.activeClaim(pluginId);
+    const leaseEpoch = this.#reconciler.activeLeaseEpoch(pluginId);
+    return claim === undefined || leaseEpoch === undefined || claim.leaseEpoch !== leaseEpoch
+      ? undefined
+      : claim;
+  }
+
+  /** Invokes the active plugin; success is evidence, but untrusted output is never returned. */
+  async assertWorkspaceMetadataCapability(pluginId: string): Promise<void> {
+    const claim = this.#gates.activeClaim(pluginId);
+    if (claim === undefined) throw new Error("Plugin runtime plugin is inactive.");
+    await this.#activator.invoke(claim.activationKey);
   }
 
   denyPlugin(
@@ -138,6 +183,17 @@ export class ReconciledPluginRuntimeRealm implements PluginRuntimeRealm {
       activationKey: string,
       manifestDigest: string): boolean {
     return this.#gates.denyClaim(pluginId, activationKey, manifestDigest);
+  }
+
+  denyStagedPlugin(
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): boolean {
+    return this.#gates.denyStagedClaim(pluginId, activationKey, manifestDigest);
+  }
+
+  async removeRevokedPlugin(pluginId: string, leaseEpoch: string): Promise<void> {
+    await this.#reconciler.invalidateActive(pluginId, leaseEpoch);
   }
 
   async #applyDesiredState(): Promise<void> {

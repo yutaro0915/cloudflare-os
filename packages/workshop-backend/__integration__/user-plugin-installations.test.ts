@@ -36,7 +36,10 @@ describe("user plugin installations", () => {
       config: { panel: "right" },
     };
 
-    await expect(owner.putUserPluginInstallation(input)).resolves.toEqual({ok: true});
+    await expect(owner.putUserPluginInstallation(input)).resolves.toEqual({
+      ok: true,
+      installationId: input.installationId,
+    });
 
     await abortAllDurableObjects();
     owner = exports.UserDurableObject.getByName("plugin-installation-owner");
@@ -84,8 +87,14 @@ describe("user plugin installations", () => {
       grantedCapabilities: ["ui.panel", "agent.catalog.read"],
     };
 
-    await expect(owner.putUserPluginInstallation(first)).resolves.toEqual({ok: true});
-    await expect(owner.putUserPluginInstallation(second)).resolves.toEqual({ok: true});
+    await expect(owner.putUserPluginInstallation(first)).resolves.toEqual({
+      ok: true,
+      installationId: first.installationId,
+    });
+    await expect(owner.putUserPluginInstallation(second)).resolves.toEqual({
+      ok: true,
+      installationId: first.installationId,
+    });
 
     await abortAllDurableObjects();
     owner = exports.UserDurableObject.getByName("plugin-installation-audit-owner");
@@ -114,7 +123,7 @@ describe("user plugin installations", () => {
         actorUserId: owner.id.toString(),
         scope: "user",
         targetId: owner.id.toString(),
-        installationId: second.installationId,
+        installationId: first.installationId,
         pluginId: second.pluginId,
         packageVersion: second.packageVersion,
         manifestDigest: second.manifestDigest,
@@ -125,7 +134,7 @@ describe("user plugin installations", () => {
     ]);
     expect(events[0]).not.toHaveProperty("config");
     await expect(owner.listUserPluginInstallations()).resolves.toMatchObject([
-      {installationId: second.installationId, packageVersion: second.packageVersion},
+      {installationId: first.installationId, packageVersion: second.packageVersion},
     ]);
   });
 });

@@ -10,6 +10,7 @@ import type {
   VerifiedPluginCodeArtifact,
 } from "./plugin-code-artifact.js";
 import type { RuntimePluginPlan } from "./plugin-reconciler.js";
+import { isSupportedPluginRuntimeCapability } from "./plugin-runtime-capabilities.js";
 
 const PLUGIN_HARNESS_ABI = "plugin-harness-v1";
 const PLUGIN_COMPATIBILITY_DATE = "2026-02-01";
@@ -18,10 +19,21 @@ const PLUGIN_LIMITS = {cpuMs: 50, subRequests: 16} as const;
 const PLUGIN_RUNTIME_POLICY = "default-deny-v1";
 const MAX_PLUGIN_ARTIFACT_BYTES = 256 * 1024;
 const PLUGIN_HANDSHAKE_TIMEOUT_MS = 5_000;
+const PLUGIN_INVOKE_TIMEOUT_MS = 5_000;
 
 const PLUGIN_HARNESS = `
 import { WorkerEntrypoint } from "cloudflare:workers";
 import plugin from "plugin.js";
+
+function pluginContext(env) {
+  const capabilities = {};
+  if (env.WORKSPACE_METADATA !== undefined) {
+    capabilities.workspaceMetadata = Object.freeze({
+      read: () => env.WORKSPACE_METADATA.read(),
+    });
+  }
+  return Object.freeze({capabilities: Object.freeze(capabilities)});
+}
 
 export default class extends WorkerEntrypoint {
   async verify() {
@@ -30,18 +42,31 @@ export default class extends WorkerEntrypoint {
       throw new TypeError("Plugin artifact must export default.handshake().");
     }
     await plugin.handshake();
+    await this.env.PLUGIN_HOST.verifyStaged();
+  }
+
+  async invoke() {
+    await this.env.PLUGIN_HOST.assertActive();
+    if (typeof plugin?.invoke !== "function") {
+      throw new TypeError("Plugin artifact must export default.invoke().");
+    }
+    await plugin.invoke(pluginContext(this.env));
   }
 }
 `;
 
 interface PluginWorkerEntrypoint extends WorkerEntrypoint {
   verify(): Promise<void>;
+  invoke(): Promise<void>;
 }
 
 /** Started Dynamic Worker control surface hidden from the domain activator. */
 export interface PluginWorkerControl {
   /** Awaits host harness import, staged-gate verification, and plugin handshake. */
   verify(): Promise<void>;
+
+  /** Invokes the fixed active plugin ABI after host gate verification. */
+  invoke(): Promise<void>;
 }
 
 /** Deep port that starts one host-composed Dynamic Worker definition. */
@@ -62,7 +87,11 @@ export interface PluginCapabilityGatePreparation extends PreparedPluginExecution
 /** Stages installation-scoped, synchronously revocable capability routing. */
 export interface PluginCapabilityGateRegistry {
   /** Creates an unselected gate whose bindings re-check this activation key on every call. */
-  stage(plan: RuntimePluginPlan, activationKey: string): PluginCapabilityGatePreparation;
+  stage(
+    plan: RuntimePluginPlan,
+    activationKey: string,
+    activationAttemptId: string,
+  ): PluginCapabilityGatePreparation;
 }
 
 /** Stable authenticated locator for one user-role realm inside an owning workspace. */
@@ -92,7 +121,10 @@ export class WorkerLoaderPluginWorkerStarter implements PluginWorkerStarter {
       id: string,
       getCode: () => Promise<WorkerLoaderWorkerCode>): Promise<PluginWorkerControl> {
     const entrypoint = this.loader.get(id, getCode).getEntrypoint<PluginWorkerEntrypoint>();
-    return {verify: () => entrypoint.verify()};
+    return {
+      verify: () => entrypoint.verify(),
+      invoke: () => entrypoint.invoke(),
+    };
   }
 }
 
@@ -141,9 +173,11 @@ function canonicalJson(value: unknown, ancestors = new Set<object>()): string {
 /** Computes a fixed-length cache key from code, authority, configuration, and host policy. */
 export async function pluginActivationKey(
     realm: PluginRuntimeRealmIdentity,
-    plan: RuntimePluginPlan): Promise<string> {
+    plan: RuntimePluginPlan,
+    activationAttemptId: string): Promise<string> {
   const canonical = canonicalJson({
     realm,
+    activationAttemptId,
     scope: plan.installation.scope,
     targetId: plan.installation.targetId,
     installationId: plan.installation.installationId,
@@ -161,6 +195,7 @@ export async function pluginActivationKey(
     limits: PLUGIN_LIMITS,
     maxArtifactBytes: MAX_PLUGIN_ARTIFACT_BYTES,
     handshakeTimeoutMs: PLUGIN_HANDSHAKE_TIMEOUT_MS,
+    invokeTimeoutMs: PLUGIN_INVOKE_TIMEOUT_MS,
     runtimePolicy: PLUGIN_RUNTIME_POLICY,
   });
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
@@ -176,6 +211,23 @@ async function verifyWithinDeadline(control: PluginWorkerControl): Promise<void>
         timeout = setTimeout(
           () => reject(new Error("Plugin handshake timed out.")),
           PLUGIN_HANDSHAKE_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+async function invokeWithinDeadline(control: PluginWorkerControl): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      control.invoke(),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("Plugin invocation timed out.")),
+          PLUGIN_INVOKE_TIMEOUT_MS,
         );
       }),
     ]);
@@ -206,6 +258,8 @@ function workerCode(
 
 /** Isolates verified prebundled plugin code behind Dynamic Workers and revocable host gates. */
 export class DynamicWorkerPluginExecutionActivator implements PluginExecutionActivator {
+  readonly #controls = new Map<string, PluginWorkerControl>();
+
   /** Creates a default-deny activator without exposing Worker Loader details to Cordis. */
   constructor(
     private realm: PluginRuntimeRealmIdentity,
@@ -216,13 +270,18 @@ export class DynamicWorkerPluginExecutionActivator implements PluginExecutionAct
 
   async prepare(
       candidate: RuntimePluginPlan,
+      activationAttemptId: string,
       addCleanup: (label: string, step: () => void | Promise<void>) => void,
   ): Promise<PreparedPluginExecution> {
-    if (candidate.installation.grantedCapabilities.length > 0) {
-      throw new Error("Plugin capability bindings are not implemented for this runtime policy.");
+    if (!candidate.installation.grantedCapabilities.every(isSupportedPluginRuntimeCapability)) {
+      throw new Error("Plugin runtime capability is not supported by this host policy.");
     }
-    const activationKey = await pluginActivationKey(this.realm, candidate);
-    const gate = this.gates.stage(candidate, activationKey);
+    const activationKey = await pluginActivationKey(
+      this.realm,
+      candidate,
+      activationAttemptId,
+    );
+    const gate = this.gates.stage(candidate, activationKey, activationAttemptId);
     addCleanup("plugin-capability-gate", () => gate.abort());
     try {
       const control = await this.starter.start(activationKey, async () => {
@@ -230,12 +289,24 @@ export class DynamicWorkerPluginExecutionActivator implements PluginExecutionAct
         if (!result.ok) throw new Error(`Plugin code artifact rejected: ${result.error}`);
         return workerCode(result.artifact, gate.env);
       });
+      this.#controls.set(activationKey, control);
+      addCleanup("plugin-worker-control", () => {
+        if (this.#controls.get(activationKey) === control) this.#controls.delete(activationKey);
+      });
       await verifyWithinDeadline(control);
       return gate;
     } catch (error) {
+      this.#controls.delete(activationKey);
       gate.abort();
       throw error;
     }
+  }
+
+  /** Invokes one active Dynamic Worker control selected by its complete activation key. */
+  async invoke(activationKey: string): Promise<void> {
+    const control = this.#controls.get(activationKey);
+    if (control === undefined) throw new Error("Plugin worker control is unavailable.");
+    return invokeWithinDeadline(control);
   }
 }
 

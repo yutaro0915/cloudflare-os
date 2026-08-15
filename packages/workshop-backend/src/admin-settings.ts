@@ -24,6 +24,10 @@ import {
   type PluginManifestDenylistRecord,
   type PluginMutationActor,
   type PutDeploymentPluginInstallationInput,
+  type PluginRuntimeCapabilityClaim,
+  isPluginRuntimeCapabilityAuthorized,
+  isPluginRuntimeCandidateCurrent,
+  type PluginRuntimeCandidateClaim,
 } from './plugin-installation.js';
 
 const logger = createWorkshopLogger("workshop.admin.settings");
@@ -123,6 +127,23 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
         record => record.manifestDigest,
       ).toSorted(),
     };
+  }
+
+  /** Checks one exact runtime capability against current deployment desired state. */
+  async authorizePluginCapabilityForRuntimeHost(
+      claim: PluginRuntimeCapabilityClaim): Promise<boolean> {
+    if (claim.scope !== "deployment" || claim.targetId !== this.ctx.id.toString()) return false;
+    const installation = this.storage.deploymentPluginInstallations.get(claim.pluginId);
+    return installation !== undefined &&
+      isPluginRuntimeCapabilityAuthorized(installation, claim);
+  }
+
+  /** Checks an exact staged candidate against current deployment desired state. */
+  async authorizePluginCandidateForRuntimeHost(
+      claim: PluginRuntimeCandidateClaim): Promise<boolean> {
+    if (claim.scope !== "deployment" || claim.targetId !== this.ctx.id.toString()) return false;
+    const installation = this.storage.deploymentPluginInstallations.get(claim.pluginId);
+    return installation !== undefined && isPluginRuntimeCandidateCurrent(installation, claim);
   }
 
   /** Fails closed for malformed values and otherwise checks the permanent deployment denylist. */

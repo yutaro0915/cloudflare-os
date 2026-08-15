@@ -3,10 +3,13 @@ import type {
   PluginCapabilityGateRegistry,
 } from "./dynamic-worker-plugin-activator.js";
 import type { RuntimePluginPlan } from "./plugin-reconciler.js";
+import type { EffectivePluginInstallation } from "./plugin-effective-configuration.js";
 
 interface ActiveGate {
   activationKey: string;
+  leaseEpoch: string;
   manifestDigest: string;
+  installation: EffectivePluginInstallation;
 }
 
 /** Exact non-secret claim used only by trusted host loopback diagnostics. */
@@ -14,8 +17,29 @@ export interface PluginRuntimeGateClaim {
   /** Complete activation identity captured by the Dynamic Worker binding. */
   activationKey: string;
 
+  /** Opaque reconciler lease epoch atomically selected with this gate. */
+  leaseEpoch: string;
+
   /** Immutable manifest digest selected by the current gate. */
   manifestDigest: string;
+}
+
+/** Host-owned installation authority selected by one exact local capability gate. */
+export interface PluginCapabilityAuthority {
+  /** Installation snapshot approved when this runtime was staged. */
+  installation: EffectivePluginInstallation;
+
+  /** Actual current local gate phase, never inferred by a remote caller. */
+  phase: "staged" | "active";
+
+  /** Opaque activation token captured by the selected gate. */
+  leaseEpoch: string;
+}
+
+/** Exact staged installation snapshot used for a final owner-SSOT commit check. */
+export interface PluginStagedInstallationAuthority {
+  /** Candidate installation captured before its untrusted handshake started. */
+  installation: EffectivePluginInstallation;
 }
 
 /** Creates explicit stable loopback bindings for one staged activation. */
@@ -40,12 +64,22 @@ export class InMemoryPluginCapabilityGateRegistry implements PluginCapabilityGat
   constructor(private makeEnv: PluginCapabilityEnvFactory) {}
 
   /** Stages an unselected activation and its stable loopback bindings. */
-  stage(plan: RuntimePluginPlan, activationKey: string): PluginCapabilityGatePreparation {
+  stage(
+      plan: RuntimePluginPlan,
+      activationKey: string,
+      leaseEpoch: string): PluginCapabilityGatePreparation {
     if (this.#closed) throw new Error("Plugin capability gate realm is closed.");
     const pluginId = plan.installation.pluginId;
     const manifestDigest = plan.installation.manifestDigest;
     const env = this.makeEnv(plan, activationKey);
-    this.#staged.set(activationKey, {activationKey, pluginId, manifestDigest});
+    const installation = structuredClone(plan.installation);
+    this.#staged.set(activationKey, {
+      activationKey,
+      leaseEpoch,
+      pluginId,
+      manifestDigest,
+      installation,
+    });
     let state: "staged" | "committed" | "aborted" = "staged";
     return {
       env,
@@ -57,7 +91,12 @@ export class InMemoryPluginCapabilityGateRegistry implements PluginCapabilityGat
         }
         state = "committed";
         this.#staged.delete(activationKey);
-        this.#activeByPluginId.set(pluginId, {activationKey, manifestDigest});
+        this.#activeByPluginId.set(pluginId, {
+          activationKey,
+          leaseEpoch,
+          manifestDigest,
+          installation,
+        });
         let revoked = false;
         return {
           revoke: () => {
@@ -89,6 +128,57 @@ export class InMemoryPluginCapabilityGateRegistry implements PluginCapabilityGat
     return active?.activationKey === activationKey && active.manifestDigest === manifestDigest;
   }
 
+  /** Checks a host-known capability against one exact staged or active immutable claim. */
+  isCapabilityGranted(
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string,
+      capability: string,
+      phase: "staged" | "active" | "staged-or-active"): boolean {
+    const matches = (claim: ActiveGate | undefined) =>
+      claim?.activationKey === activationKey &&
+      claim.manifestDigest === manifestDigest &&
+      claim.installation.grantedCapabilities.includes(capability);
+    if (phase !== "active") {
+      const staged = this.#staged.get(activationKey);
+      if (staged?.pluginId === pluginId && matches(staged)) return true;
+    }
+    return phase !== "staged" && matches(this.#activeByPluginId.get(pluginId));
+  }
+
+  /** Returns an owned authority snapshot only for an exact granted local claim. */
+  capabilityAuthority(
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string,
+      capability: string,
+      phase: "staged" | "active"): PluginCapabilityAuthority | undefined {
+    if (!this.isCapabilityGranted(
+      pluginId, activationKey, manifestDigest, capability, phase,
+    )) return undefined;
+    const claim = phase === "staged"
+      ? this.#staged.get(activationKey)
+      : this.#activeByPluginId.get(pluginId);
+    return claim === undefined ? undefined : {
+      installation: structuredClone(claim.installation),
+      phase,
+      leaseEpoch: claim.leaseEpoch,
+    };
+  }
+
+  /** Returns an owned candidate only while this exact immutable claim remains staged. */
+  stagedInstallationAuthority(
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): PluginStagedInstallationAuthority | undefined {
+    const claim = this.#staged.get(activationKey);
+    if (
+      claim?.pluginId !== pluginId ||
+      claim.manifestDigest !== manifestDigest
+    ) return undefined;
+    return {installation: structuredClone(claim.installation)};
+  }
+
   /** Immediately revokes an exact denied staged or active claim before physical cleanup. */
   denyClaim(pluginId: string, activationKey: string, manifestDigest: string): boolean {
     let denied = false;
@@ -103,6 +193,13 @@ export class InMemoryPluginCapabilityGateRegistry implements PluginCapabilityGat
     return denied;
   }
 
+  /** Aborts only an exact staged candidate without touching a same-digest active lease. */
+  denyStagedClaim(pluginId: string, activationKey: string, manifestDigest: string): boolean {
+    if (!this.isStaged(pluginId, activationKey, manifestDigest)) return false;
+    this.#staged.delete(activationKey);
+    return true;
+  }
+
   /** Returns whether any current generation activation is selected for host diagnostics. */
   hasActivePlugin(pluginId: string): boolean {
     return this.#activeByPluginId.has(pluginId);
@@ -111,7 +208,11 @@ export class InMemoryPluginCapabilityGateRegistry implements PluginCapabilityGat
   /** Returns an owned exact active claim for a trusted host diagnostic. */
   activeClaim(pluginId: string): PluginRuntimeGateClaim | undefined {
     const claim = this.#activeByPluginId.get(pluginId);
-    return claim === undefined ? undefined : {...claim};
+    return claim === undefined ? undefined : {
+      activationKey: claim.activationKey,
+      leaseEpoch: claim.leaseEpoch,
+      manifestDigest: claim.manifestDigest,
+    };
   }
 
   /** Permanently denies this realm before asynchronous runtime cleanup begins. */

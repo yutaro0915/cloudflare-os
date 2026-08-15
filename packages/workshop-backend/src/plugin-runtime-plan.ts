@@ -5,6 +5,7 @@ import type {
   RuntimePluginPlan,
   RuntimePluginPreflightFailure,
 } from "./plugin-reconciler.js";
+import { isSupportedPluginRuntimeCapability } from "./plugin-runtime-capabilities.js";
 
 /** Result of enriching one effective snapshot from verified immutable manifests. */
 export type BuildRuntimePluginPlansResult = Omit<
@@ -66,6 +67,14 @@ export async function buildRuntimePluginPlans(
         installation,
         retention: "allowed",
         reason: "RUNTIME_ARTIFACT_NOT_DECLARED",
+      });
+      continue;
+    }
+    if (!installation.grantedCapabilities.every(isSupportedPluginRuntimeCapability)) {
+      preflightFailures.push({
+        installation,
+        retention: "allowed",
+        reason: "CAPABILITY_UNSUPPORTED",
       });
       continue;
     }

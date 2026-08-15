@@ -18,13 +18,18 @@ class FakeRuntimeAdapter implements PluginRuntimeAdapter<FakeLease> {
   readonly active = new Map<string, FakeLease>();
   readonly failReplace = new Set<string>();
   readonly failRemove = new Set<string>();
+  readonly activationAttempts = new Map<string, string>();
 
-  async replace(candidate: RuntimePluginPlan, previous?: FakeLease): Promise<FakeLease> {
+  async replace(
+      candidate: RuntimePluginPlan,
+      activationAttemptId: string,
+      previous?: FakeLease): Promise<FakeLease> {
     const {pluginId, packageVersion} = candidate.installation;
     this.events.push(`replace:${pluginId}@${packageVersion}:${previous?.id ?? "none"}`);
     if (this.failReplace.has(`${pluginId}@${packageVersion}`)) {
       throw new Error("activation failed");
     }
+    this.activationAttempts.set(pluginId, activationAttemptId);
     const lease = {id: crypto.randomUUID(), pluginId, packageVersion};
     this.active.set(pluginId, lease);
     return lease;
@@ -54,7 +59,10 @@ class BlockingRuntimeAdapter implements PluginRuntimeAdapter<FakeLease> {
     this.#releaseFirst();
   }
 
-  async replace(candidate: RuntimePluginPlan, previous?: FakeLease): Promise<FakeLease> {
+  async replace(
+      candidate: RuntimePluginPlan,
+      _activationAttemptId: string,
+      previous?: FakeLease): Promise<FakeLease> {
     const {pluginId, packageVersion} = candidate.installation;
     this.events.push(`replace:${packageVersion}:${previous?.id ?? "none"}`);
     if (this.#leaseSequence === 0) {
@@ -214,6 +222,75 @@ describe("plugin reconciler", () => {
     expect(runtime.events).toEqual([]);
   });
 
+  it("force-removes an authority-revoked lease so the same desired plan can reactivate", async () => {
+    const runtime = new FakeRuntimeAdapter();
+    const reconciler = new PluginReconciler(runtime);
+    const desired = plan("example.runtime", "1.0.0");
+    await reconciler.reconcile({ok: true, plans: [desired]});
+    const first = runtime.active.get("example.runtime");
+    if (!first) throw new Error("Expected initial runtime lease.");
+    const firstEpoch = reconciler.activeLeaseEpoch("example.runtime");
+    if (firstEpoch === undefined) throw new Error("Expected initial lease epoch.");
+    runtime.events.length = 0;
+
+    await reconciler.invalidateActive("example.runtime", firstEpoch);
+    expect(runtime.events).toEqual([`remove:${first.id}`]);
+    runtime.events.length = 0;
+
+    await reconciler.reconcile({ok: true, plans: [desired]});
+    expect(runtime.events).toEqual(["replace:example.runtime@1.0.0:none"]);
+    expect(reconciler.activeLeaseEpoch("example.runtime")).not.toBe(firstEpoch);
+  });
+
+  it("does not let a delayed invalidation remove a newer same-digest lease", async () => {
+    const runtime = new FakeRuntimeAdapter();
+    const reconciler = new PluginReconciler(runtime);
+    const firstPlan = plan("example.runtime");
+    await reconciler.reconcile({ok: true, plans: [firstPlan]});
+    const firstEpoch = reconciler.activeLeaseEpoch("example.runtime");
+    if (firstEpoch === undefined) throw new Error("Expected initial lease epoch.");
+    const replacement = structuredClone(firstPlan);
+    replacement.installation.config = {mode: "replacement"};
+    await reconciler.reconcile({ok: true, plans: [replacement]});
+    const replacementLease = runtime.active.get("example.runtime");
+    const replacementEpoch = reconciler.activeLeaseEpoch("example.runtime");
+    if (!replacementLease || replacementEpoch === undefined) {
+      throw new Error("Expected replacement lease.");
+    }
+    runtime.events.length = 0;
+
+    await reconciler.invalidateActive("example.runtime", firstEpoch);
+
+    expect(runtime.events).toEqual([]);
+    expect(runtime.active.get("example.runtime")).toBe(replacementLease);
+    expect(reconciler.activeLeaseEpoch("example.runtime")).toBe(replacementEpoch);
+  });
+
+  it("retries a revoked lease removal before reactivating the same desired plan", async () => {
+    const runtime = new FakeRuntimeAdapter();
+    const reconciler = new PluginReconciler(runtime);
+    const desired = plan("example.runtime");
+    await reconciler.reconcile({ok: true, plans: [desired]});
+    const first = runtime.active.get("example.runtime");
+    const firstEpoch = reconciler.activeLeaseEpoch("example.runtime");
+    if (!first || firstEpoch === undefined) throw new Error("Expected initial lease.");
+    runtime.failRemove.add("example.runtime");
+    runtime.events.length = 0;
+
+    await reconciler.invalidateActive("example.runtime", firstEpoch);
+    expect(runtime.events).toEqual([`remove:${first.id}`]);
+    runtime.failRemove.clear();
+    runtime.events.length = 0;
+
+    await reconciler.reconcile({ok: true, plans: [desired]});
+
+    expect(runtime.events).toEqual([
+      `remove:${first.id}`,
+      "replace:example.runtime@1.0.0:none",
+    ]);
+    expect(reconciler.activeLeaseEpoch("example.runtime")).not.toBe(firstEpoch);
+  });
+
   it("activates an initial desired plugin through the runtime port", async () => {
     const runtime = new FakeRuntimeAdapter();
     const reconciler = new PluginReconciler(runtime);
@@ -284,6 +361,8 @@ describe("plugin reconciler", () => {
         },
       ],
     });
+    expect(reconciler.activeLeaseEpoch("example.runtime"))
+      .toBe(runtime.activationAttempts.get("example.runtime"));
     expect(runtime.active.get("a.plugin")).toBe(oldLease);
     expect(runtime.active.get("b.plugin")).toMatchObject({packageVersion: "1.0.0"});
     expect(runtime.events.slice(1)).toEqual([

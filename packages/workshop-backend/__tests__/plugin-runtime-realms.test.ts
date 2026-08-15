@@ -24,6 +24,9 @@ class FakeRealm implements PluginRuntimeRealm {
   revokeError?: Error;
   closePromise = Promise.resolve();
   denyMatches = true;
+  invocationError?: Error;
+  removedRevoked: Array<{pluginId: string; manifestDigest: string}> = [];
+  stagedDenials = 0;
 
   async refresh(): Promise<void> {
     this.refreshes += 1;
@@ -53,13 +56,55 @@ class FakeRealm implements PluginRuntimeRealm {
     if (!this.active) throw new Error("Plugin runtime plugin is inactive.");
   }
 
-  activeClaim(): {activationKey: string; manifestDigest: string} | undefined {
-    return this.active ? {activationKey: "activation-v1", manifestDigest: DIGEST} : undefined;
+  activeCapabilityAuthority() {
+    return this.active ? {
+      installation: {
+        scope: "user" as const,
+        targetId: "user-a",
+        installationId: "installation-a",
+        pluginId: "example.runtime",
+        packageVersion: "1.0.0",
+        manifestDigest: DIGEST,
+        grantedCapabilities: ["workspace.metadata.read"],
+        config: null,
+      },
+      phase: "active" as const,
+    } : undefined;
+  }
+
+  stagedInstallationAuthority() {
+    return undefined;
+  }
+
+  activeClaim(): {
+    activationKey: string;
+    manifestDigest: string;
+    leaseEpoch: string;
+  } | undefined {
+    return this.active ? {
+      activationKey: "activation-v1",
+      manifestDigest: DIGEST,
+      leaseEpoch: "lease-epoch-v1",
+    } : undefined;
+  }
+
+  async assertWorkspaceMetadataCapability() {
+    if (!this.active) throw new Error("Plugin runtime plugin is inactive.");
+    if (this.invocationError) throw this.invocationError;
+  }
+
+  async removeRevokedPlugin(pluginId: string, manifestDigest: string): Promise<void> {
+    this.removedRevoked.push({pluginId, manifestDigest});
   }
 
   denyPlugin(): boolean {
     if (!this.denyMatches) return false;
     this.active = false;
+    return true;
+  }
+
+  denyStagedPlugin(): boolean {
+    this.stagedDenials += 1;
     return true;
   }
 }
@@ -267,6 +312,56 @@ describe("plugin runtime realms", () => {
     expect(realm.refreshes).toBe(3);
     session.release();
     second.release();
+  });
+
+  it("retires an exact lease and refreshes after an active invocation fails", async () => {
+    const tracked: Promise<void>[] = [];
+    const realm = new FakeRealm();
+    realm.invocationError = new Error("Plugin invocation timed out.");
+    const realms = new PluginRuntimeRealms(
+      "workspace-a",
+      () => realm,
+      cleanup => tracked.push(cleanup),
+    );
+    const session = await realms.acquire(LOCATOR);
+
+    await expect(realms.assertWorkspaceMetadataCapability(
+      LOCATOR,
+      "example.runtime",
+    )).rejects.toThrow("Plugin invocation timed out");
+
+    expect(realm.active).toBe(false);
+    expect(tracked).toHaveLength(1);
+    await tracked[0];
+    expect(realm.removedRevoked).toEqual([{
+      pluginId: "example.runtime",
+      manifestDigest: "lease-epoch-v1",
+    }]);
+    expect(realm.refreshes).toBe(2);
+    session.release();
+  });
+
+  it("aborts a staged candidate without retiring the active lease", async () => {
+    let identity: PluginRuntimeRealmIdentity | undefined;
+    const tracked: Promise<void>[] = [];
+    const realm = new FakeRealm();
+    const realms = new PluginRuntimeRealms(
+      "workspace-a",
+      createdIdentity => {
+        identity = createdIdentity;
+        return realm;
+      },
+      cleanup => tracked.push(cleanup),
+    );
+    const session = await realms.acquire(LOCATOR);
+
+    realms.denyStagedPlugin(identity!, "example.runtime", "candidate-b", DIGEST);
+
+    expect(realm.stagedDenials).toBe(1);
+    expect(realm.active).toBe(true);
+    expect(realm.removedRevoked).toEqual([]);
+    expect(tracked).toEqual([]);
+    session.release();
   });
 
   it("tracks async cleanup even when synchronous revocation and the tracker fail", async () => {
