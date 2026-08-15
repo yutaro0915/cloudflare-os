@@ -172,6 +172,34 @@ export interface DetachedUserPluginStateRecord {
   detachedAt: number;
 }
 
+/** Immutable identity bound to one user-owned PluginState Durable Object. */
+export interface PluginStateOwner {
+  scope: "user";
+  targetId: string;
+  pluginId: string;
+  installationId: string;
+}
+
+/** Persistent owner-side marker for one crash-resumable detached-state purge. */
+export type UserPluginStatePurge = {
+  schemaVersion: 1;
+  phase: "PENDING";
+  installationId: string;
+  pluginId: string;
+  packageVersion: string;
+  manifestDigest: string;
+  stateRef: string;
+  startedAt: number;
+} | {
+  schemaVersion: 1;
+  phase: "FINALIZED";
+  installationId: string;
+  pluginId: string;
+  packageVersion: string;
+  manifestDigest: string;
+  purgedAt: number;
+};
+
 const MAX_PLUGIN_CONFIGURATION_DEPTH = 32;
 const MAX_PLUGIN_CONFIGURATION_VALUES = 10_000;
 
@@ -545,7 +573,7 @@ export interface UserPluginAuditEvent {
   sequence: number;
 
   /** Mutation recorded by this event. */
-  action: "PLUGIN_DESIRED_STATE_PUT" | "PLUGIN_UNINSTALLED";
+  action: "PLUGIN_DESIRED_STATE_PUT" | "PLUGIN_UNINSTALLED" | "PLUGIN_STATE_PURGED";
 
   /** UserDurableObject ID stamped as the authenticated actor. */
   actorUserId: string;
@@ -610,6 +638,31 @@ export type FinalizeUserPluginUninstallResult = {
 } | {
   ok: false;
   error: "PLUGIN_NOT_INSTALLED" | "INSTALLATION_CHANGED" | "UNINSTALL_IN_PROGRESS";
+};
+
+/** Transactional owner-side first phase of one detached-state purge. */
+export type BeginUserPluginStatePurgeResult = {
+  ok: true;
+  phase: "PURGE_REQUIRED";
+  installationId: string;
+  stateRef: string;
+  owner: PluginStateOwner;
+} | {
+  ok: true;
+  phase: "FINALIZED";
+  installationId: string;
+} | {
+  ok: false;
+  error: "DETACHED_PLUGIN_STATE_NOT_FOUND";
+};
+
+/** Exactly-once detached pointer removal and purge audit result. */
+export type FinalizeUserPluginStatePurgeResult = {
+  ok: true;
+  installationId: string;
+} | {
+  ok: false;
+  error: "DETACHED_PLUGIN_STATE_NOT_FOUND";
 };
 
 /** Returns whether a manifest digest is in canonical content-addressed form. */

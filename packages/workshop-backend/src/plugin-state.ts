@@ -1,15 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { collection, createTypedStorage } from "@gadgets/typed-storage";
-import type { PluginConfigurationValue } from "./plugin-installation.js";
+import type { PluginConfigurationValue, PluginStateOwner } from "./plugin-installation.js";
 import { decodePluginConfigurationValue } from "./plugin-installation.js";
-
-/** Immutable installation owner tuple stamped into one PluginState Durable Object. */
-export interface PluginStateOwner {
-  scope: "user";
-  targetId: string;
-  pluginId: string;
-  installationId: string;
-}
 
 interface PluginStateValue {
   key: string;
@@ -57,6 +49,33 @@ export class PluginStateDurableObject extends DurableObject<Cloudflare.Env> {
     this.#assertOwner(owner);
     if (this.#storage.purged.get()) throw new Error("Plugin state was purged.");
     this.#storage.values.put({key, value: decodePluginConfigurationValue(value)});
+  }
+
+  /** Permanently erases values while retaining immutable owner and purged tombstones. */
+  purge(owner: PluginStateOwner): {
+    ok: true;
+    alreadyPurged: boolean;
+    deletedValueCount: number;
+  } {
+    let alreadyPurged = false;
+    let deletedValueCount = 0;
+    this.ctx.storage.transactionSync(() => {
+      this.#assertOwner(owner);
+      alreadyPurged = this.#storage.purged.get();
+      if (alreadyPurged) return;
+      const values = Array.from(this.#storage.values.list());
+      for (const value of values) {
+        if (!this.#storage.values.delete(value.key)) {
+          throw new Error("Plugin state purge lost a value before deletion.");
+        }
+        deletedValueCount += 1;
+      }
+      if (Array.from(this.#storage.values.list(), value => value.key).length !== 0) {
+        throw new Error("Plugin state purge left residual values.");
+      }
+      this.#storage.purged.put(true);
+    });
+    return {ok: true, alreadyPurged, deletedValueCount};
   }
 
   #assertOwner(owner: PluginStateOwner): void {

@@ -14,6 +14,7 @@ const EXPECTED_RPC_ERROR_MESSAGES = new Set([
   "Plugin runtime capability is no longer authorized.",
   "Plugin runtime lifecycle is no longer authorized.",
   "Plugin state owner mismatch.",
+  "Plugin state was purged.",
 ]);
 
 export default defineConfig({

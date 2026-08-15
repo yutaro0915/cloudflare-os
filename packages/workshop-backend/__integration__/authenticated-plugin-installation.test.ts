@@ -212,4 +212,124 @@ describe("authenticated user plugin installation", () => {
     expect((await owner.listUserPluginAuditEvents())
       .filter(event => event.action === "PLUGIN_UNINSTALLED")).toHaveLength(1);
   });
+
+  it("resumes detached state purge across both crash windows without exposing state refs", async () => {
+    using publicApi = await connect();
+    const account = await createAccount(publicApi, "pluginpurge");
+    using authenticated = await publicApi.authenticate(account.token);
+    const installed = await authenticated.installUserPlugin({
+      pluginId: "test.runtime-metadata",
+      packageVersion: "1.0.0",
+      approvedCapabilities: ["plugin.state.read", "workspace.metadata.read"],
+    });
+    if (!installed.ok) throw new Error("Expected stateful plugin installation to succeed.");
+    await authenticated.uninstallUserPlugin({
+      pluginId: "test.runtime-metadata",
+      expectedInstallationId: installed.installationId,
+    });
+
+    let owner = exports.UserDurableObject.getByName(account.username);
+    const [detached] = await owner.listDetachedUserPluginStatesForHost();
+    if (detached === undefined) throw new Error("Expected detached plugin state.");
+    const firstBegin = await owner.beginUserPluginStatePurge(detached.installationId);
+    if (!firstBegin.ok || firstBegin.phase !== "PURGE_REQUIRED") {
+      throw new Error("Expected pending purge marker.");
+    }
+    await abortAllDurableObjects();
+
+    using resumedAfterBegin = await publicApi.authenticate(account.token);
+    await expect(resumedAfterBegin.purgeUserPluginState({
+      installationId: detached.installationId,
+    })).resolves.toEqual({
+      ok: true,
+      installationId: detached.installationId,
+    });
+    await expect(resumedAfterBegin.listDetachedUserPluginStates()).resolves.toEqual([]);
+
+    const reinstalled = await resumedAfterBegin.installUserPlugin({
+      pluginId: "test.runtime-metadata",
+      packageVersion: "1.0.0",
+      approvedCapabilities: ["plugin.state.read", "workspace.metadata.read"],
+    });
+    if (!reinstalled.ok) throw new Error("Expected replacement stateful installation.");
+    await resumedAfterBegin.uninstallUserPlugin({
+      pluginId: "test.runtime-metadata",
+      expectedInstallationId: reinstalled.installationId,
+    });
+    owner = exports.UserDurableObject.getByName(account.username);
+    const secondBegin = await owner.beginUserPluginStatePurge(reinstalled.installationId);
+    if (!secondBegin.ok || secondBegin.phase !== "PURGE_REQUIRED") {
+      throw new Error("Expected second purge marker.");
+    }
+    const state = exports.PluginStateDurableObject.get(
+      exports.PluginStateDurableObject.idFromString(secondBegin.stateRef),
+    );
+    await state.purge(secondBegin.owner);
+    await abortAllDurableObjects();
+
+    using resumedAfterChild = await publicApi.authenticate(account.token);
+    await expect(resumedAfterChild.purgeUserPluginState({
+      installationId: reinstalled.installationId,
+    })).resolves.toEqual({
+      ok: true,
+      installationId: reinstalled.installationId,
+    });
+    await expect(resumedAfterChild.purgeUserPluginState({
+      installationId: reinstalled.installationId,
+    })).resolves.toEqual({
+      ok: true,
+      installationId: reinstalled.installationId,
+    });
+    const latest = await resumedAfterChild.installUserPlugin({
+      pluginId: "test.runtime-metadata",
+      packageVersion: "1.0.0",
+      approvedCapabilities: ["plugin.state.read", "workspace.metadata.read"],
+    });
+    if (!latest.ok) throw new Error("Expected latest stateful installation.");
+    const latestOwner = exports.UserDurableObject.getByName(account.username);
+    const [latestInstallation] = await latestOwner.listUserPluginInstallations();
+    if (latestInstallation?.stateRef === undefined) {
+      throw new Error("Expected latest host-managed stateRef.");
+    }
+    const latestStateOwner = {
+      scope: "user" as const,
+      targetId: latestOwner.id.toString(),
+      pluginId: latestInstallation.pluginId,
+      installationId: latest.installationId,
+    };
+    const latestState = exports.PluginStateDurableObject.get(
+      exports.PluginStateDurableObject.idFromString(latestInstallation.stateRef),
+    );
+    await latestState.putForHost(latestStateOwner, "latest", {preserved: true});
+    await expect(resumedAfterChild.purgeUserPluginState({
+      installationId: reinstalled.installationId,
+    })).resolves.toEqual({
+      ok: true,
+      installationId: reinstalled.installationId,
+    });
+    await expect(exports.UserDurableObject.getByName(account.username)
+      .listUserPluginInstallations()).resolves.toMatchObject([{
+      installationId: latest.installationId,
+      stateRef: expect.any(String),
+    }]);
+    await expect(latestState.read(latestStateOwner, "latest"))
+      .resolves.toEqual({preserved: true});
+    await resumedAfterChild.uninstallUserPlugin({
+      pluginId: "test.runtime-metadata",
+      expectedInstallationId: latest.installationId,
+    });
+    await expect(resumedAfterChild.purgeUserPluginState({
+      installationId: latest.installationId,
+    })).resolves.toEqual({
+      ok: true,
+      installationId: latest.installationId,
+    });
+    await expect(resumedAfterChild.listDetachedUserPluginStates()).resolves.toEqual([]);
+    await expect(resumedAfterChild.purgeUserPluginState({
+      installationId: "unrelated-stale-installation",
+    })).resolves.toEqual({ok: false, error: "DETACHED_PLUGIN_STATE_NOT_FOUND"});
+    expect((await exports.UserDurableObject.getByName(account.username)
+      .listUserPluginAuditEvents()).filter(event => event.action === "PLUGIN_STATE_PURGED"))
+      .toHaveLength(3);
+  });
 });

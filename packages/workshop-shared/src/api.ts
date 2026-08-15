@@ -360,6 +360,27 @@ export interface DetachedUserPluginStateSummary {
   detachedAt: number;
 }
 
+/** User-scoped purge request accepted without a caller-supplied state reference. */
+export interface PurgeUserPluginStateRequest {
+  /** Exact detached installation lifecycle observed by the authenticated user. */
+  installationId: string;
+}
+
+/** Result of permanently purging one detached user plugin state lifecycle. */
+export type PurgeUserPluginStateResult = {
+  /** The exact detached lifecycle is permanently purged. */
+  ok: true;
+
+  /** Host-issued lifecycle identifier that was purged. */
+  installationId: string;
+} | {
+  /** No purge mutation was applied. */
+  ok: false;
+
+  /** Stable expected failure visible to the authenticated user. */
+  error: "DETACHED_PLUGIN_STATE_NOT_FOUND";
+};
+
 /** Workspace-scoped install result returned by `Overseer.installWorkspacePlugin()`. */
 export type InstallWorkspacePluginResult = InstallPluginResult | {
   /** The build collaborator request was rejected without changing desired state. */
@@ -382,6 +403,9 @@ export interface AuthenticatedApi extends RpcTarget {
 
   /** Lists retained detached state without exposing state references or Durable Object stubs. */
   listDetachedUserPluginStates(): Promise<DetachedUserPluginStateSummary[]>;
+
+  /** Permanently purges one exact detached state lifecycle. */
+  purgeUserPluginState(request: PurgeUserPluginStateRequest): Promise<PurgeUserPluginStateResult>;
 
   // Set the user's own display name, seen in chats, etc.
   setOwnDisplayName(name: string): Promise<void>;

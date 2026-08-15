@@ -1,5 +1,5 @@
 import { exports } from "cloudflare:workers";
-import { abortAllDurableObjects } from "cloudflare:test";
+import { abortAllDurableObjects, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type {
   UserPluginInstallation,
@@ -234,5 +234,99 @@ describe("user plugin installations", () => {
     await expect(owner.listUserPluginInstallations()).resolves.toMatchObject([{
       installationId: replacement.installationId,
     }]);
+  });
+
+  it("purges detached state idempotently while retaining its immutable owner tombstone", async () => {
+    let owner = exports.UserDurableObject.getByName("plugin-purge-owner");
+    const input: PluginInstallationInput = {
+      installationId: "installation-purge-v1",
+      pluginId: "example.purge",
+      packageVersion: "1.0.0",
+      manifestDigest: `sha256:${"d".repeat(64)}`,
+      enabled: true,
+      grantedCapabilities: ["plugin.state.read"],
+      config: null,
+    };
+    await owner.putUserPluginInstallation(input);
+    const [installed] = await owner.listUserPluginInstallations();
+    if (installed?.stateRef === undefined) throw new Error("Expected host-managed stateRef.");
+    const state = exports.PluginStateDurableObject.get(
+      exports.PluginStateDurableObject.idFromString(installed.stateRef),
+    );
+    const stateOwner = {
+      scope: "user" as const,
+      targetId: owner.id.toString(),
+      pluginId: input.pluginId,
+      installationId: input.installationId,
+    };
+    await state.putForHost(stateOwner, "marker", {present: true});
+    await state.putForHost(stateOwner, "nested", {items: [1, null, {done: false}]});
+    await state.putForHost(stateOwner, "empty", null);
+    await owner.beginUserPluginUninstall(input.pluginId, input.installationId);
+    await owner.finalizeUserPluginUninstall(input.installationId);
+
+    const begun = await owner.beginUserPluginStatePurge(input.installationId);
+    expect(begun).toMatchObject({
+      ok: true,
+      installationId: input.installationId,
+      stateRef: installed.stateRef,
+      owner: stateOwner,
+      phase: "PURGE_REQUIRED",
+    });
+    if (!begun.ok || begun.phase !== "PURGE_REQUIRED") {
+      throw new Error("Expected pending purge marker.");
+    }
+    await expect(state.purge({...stateOwner, targetId: "forged-user"}))
+      .rejects.toThrow("Plugin state owner mismatch");
+    await expect(state.read(stateOwner, "marker")).resolves.toEqual({present: true});
+    await expect(state.purge(begun.owner)).resolves.toEqual({
+      ok: true,
+      alreadyPurged: false,
+      deletedValueCount: 3,
+    });
+    await expect(runInDurableObject(state, async (_instance, stateContext) => ({
+      values: (await stateContext.storage.list({prefix: "values:"})).size,
+      owner: await stateContext.storage.get("owner"),
+      purged: await stateContext.storage.get("purged"),
+    }))).resolves.toEqual({values: 0, owner: stateOwner, purged: true});
+    await expect(state.read(stateOwner, "marker")).rejects.toThrow("Plugin state was purged");
+
+    await abortAllDurableObjects();
+    owner = exports.UserDurableObject.getByName("plugin-purge-owner");
+    await expect(owner.purgeUserPluginState(input.installationId)).resolves.toEqual({
+      ok: true,
+      installationId: input.installationId,
+    });
+    await expect(owner.beginUserPluginStatePurge(input.installationId)).resolves.toEqual({
+      ok: true,
+      phase: "FINALIZED",
+      installationId: input.installationId,
+    });
+    await expect(owner.listDetachedUserPluginStatesForHost()).resolves.toEqual([]);
+    await expect(owner.purgeUserPluginState(input.installationId)).resolves.toEqual({
+      ok: true,
+      installationId: input.installationId,
+    });
+    const purgeEvents = (await owner.listUserPluginAuditEvents())
+      .filter(event => event.action === "PLUGIN_STATE_PURGED");
+    expect(purgeEvents).toHaveLength(1);
+    const reconstructedState = exports.PluginStateDurableObject.get(
+      exports.PluginStateDurableObject.idFromString(installed.stateRef),
+    );
+    await expect(reconstructedState.purge(stateOwner)).resolves.toEqual({
+      ok: true,
+      alreadyPurged: true,
+      deletedValueCount: 0,
+    });
+    await expect(runInDurableObject(
+      reconstructedState,
+      async (_instance, stateContext) => ({
+        values: (await stateContext.storage.list({prefix: "values:"})).size,
+        owner: await stateContext.storage.get("owner"),
+        purged: await stateContext.storage.get("purged"),
+      }),
+    )).resolves.toEqual({values: 0, owner: stateOwner, purged: true});
+    await expect(reconstructedState.purge({...stateOwner, targetId: "forged-user"}))
+      .rejects.toThrow("Plugin state owner mismatch");
   });
 });

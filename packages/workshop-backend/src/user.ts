@@ -30,6 +30,9 @@ import {
   type DetachedUserPluginStateRecord,
   type BeginUserPluginUninstallResult,
   type FinalizeUserPluginUninstallResult,
+  type UserPluginStatePurge,
+  type BeginUserPluginStatePurgeResult,
+  type FinalizeUserPluginStatePurgeResult,
 } from "./plugin-installation.js";
 
 const logger = createWorkshopLogger("workshop.user");
@@ -200,6 +203,9 @@ function makeUserStorage(storage: DurableObjectStorage) {
         primaryKey: "installationId",
       }),
       detachedPluginStates: collection<DetachedUserPluginStateRecord>()({
+        primaryKey: "installationId",
+      }),
+      pluginStatePurges: collection<UserPluginStatePurge>()({
         primaryKey: "installationId",
       }),
       gadgets: collection<GadgetRecord>()({
@@ -873,6 +879,134 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   /** Lists host-only detached records; browser projection must omit stateRef. */
   listDetachedUserPluginStatesForHost(): DetachedUserPluginStateRecord[] {
     return Array.from(this.storage.detachedPluginStates.list());
+  }
+
+  /** Persists or resumes the owner-side marker for one exact detached-state purge. */
+  beginUserPluginStatePurge(
+      installationId: string): BeginUserPluginStatePurgeResult {
+    let result: BeginUserPluginStatePurgeResult = {
+      ok: false,
+      error: "DETACHED_PLUGIN_STATE_NOT_FOUND",
+    };
+    this.ctx.storage.transactionSync(() => {
+      const exactPurge = this.storage.pluginStatePurges.get(installationId);
+      if (exactPurge !== undefined) {
+        if (exactPurge.phase === "FINALIZED") {
+          result = {
+            ok: true,
+            phase: "FINALIZED",
+            installationId: exactPurge.installationId,
+          };
+          return;
+        }
+        result = {
+          ok: true,
+          phase: "PURGE_REQUIRED",
+          installationId: exactPurge.installationId,
+          stateRef: exactPurge.stateRef,
+          owner: {
+            scope: "user",
+            targetId: this.ctx.id.toString(),
+            pluginId: exactPurge.pluginId,
+            installationId: exactPurge.installationId,
+          },
+        };
+        return;
+      }
+      const detached = this.storage.detachedPluginStates.get(installationId);
+      if (detached === undefined) return;
+      const purge: UserPluginStatePurge = {
+        schemaVersion: 1,
+        phase: "PENDING",
+        installationId: detached.installationId,
+        pluginId: detached.pluginId,
+        packageVersion: detached.packageVersion,
+        manifestDigest: detached.manifestDigest,
+        stateRef: detached.stateRef,
+        startedAt: Date.now(),
+      };
+      this.storage.pluginStatePurges.put(purge);
+      result = {
+        ok: true,
+        phase: "PURGE_REQUIRED",
+        installationId: purge.installationId,
+        stateRef: purge.stateRef,
+        owner: {
+          scope: "user",
+          targetId: this.ctx.id.toString(),
+          pluginId: purge.pluginId,
+          installationId: purge.installationId,
+        },
+      };
+    });
+    return result;
+  }
+
+  /** Runs and resumes the one-way purge saga without exposing its state pointer. */
+  async purgeUserPluginState(
+      installationId: string): Promise<FinalizeUserPluginStatePurgeResult> {
+    const begun = this.beginUserPluginStatePurge(installationId);
+    if (!begun.ok) return begun;
+    if (begun.phase === "FINALIZED") {
+      return {ok: true, installationId: begun.installationId};
+    }
+    const states = this.ctx.exports.PluginStateDurableObject;
+    await states.get(states.idFromString(begun.stateRef)).purge(begun.owner);
+    return this.#finalizeUserPluginStatePurge(begun.installationId);
+  }
+
+  /** Removes one exact detached pointer and appends its purge audit exactly once. */
+  #finalizeUserPluginStatePurge(
+      installationId: string): FinalizeUserPluginStatePurgeResult {
+    let result: FinalizeUserPluginStatePurgeResult = {
+      ok: false,
+      error: "DETACHED_PLUGIN_STATE_NOT_FOUND",
+    };
+    this.ctx.storage.transactionSync(() => {
+      const purge = this.storage.pluginStatePurges.get(installationId);
+      if (purge === undefined) return;
+      if (purge.phase === "FINALIZED") {
+        result = {ok: true, installationId};
+        return;
+      }
+      const detached = this.storage.detachedPluginStates.get(installationId);
+      if (
+        detached === undefined || detached.pluginId !== purge.pluginId ||
+        detached.stateRef !== purge.stateRef
+      ) {
+        return;
+      }
+      const finalizedAt = Date.now();
+      const sequence = this.storage.nextPluginAuditSequence.get();
+      this.storage.pluginAuditEvents.put({
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_STATE_PURGED",
+        actorUserId: this.ctx.id.toString(),
+        scope: "user",
+        targetId: this.ctx.id.toString(),
+        installationId,
+        pluginId: detached.pluginId,
+        packageVersion: detached.packageVersion,
+        manifestDigest: detached.manifestDigest,
+        enabled: false,
+        grantedCapabilities: [],
+        recordedAt: finalizedAt,
+      });
+      this.storage.detachedPluginStates.delete(installationId);
+      this.storage.pluginStatePurges.put({
+        schemaVersion: 1,
+        phase: "FINALIZED",
+        installationId: purge.installationId,
+        pluginId: purge.pluginId,
+        packageVersion: purge.packageVersion,
+        manifestDigest: purge.manifestDigest,
+        purgedAt: finalizedAt,
+      });
+      this.storage.nextPluginAuditSequence.put(sequence + 1);
+      result = {ok: true, installationId};
+    });
+    return result;
   }
 
   async listSkillDefinitions(): Promise<SkillDefinition[]> {
