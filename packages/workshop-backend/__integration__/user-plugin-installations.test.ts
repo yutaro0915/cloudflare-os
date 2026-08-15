@@ -3,7 +3,7 @@ import { abortAllDurableObjects } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type {
   UserPluginInstallation,
-  UserPluginInstallationInput,
+  PluginInstallationInput,
 } from "../src/plugin-installation.js";
 
 describe("user plugin installations", () => {
@@ -22,7 +22,7 @@ describe("user plugin installations", () => {
       targetId: otherUser.id.toString(),
       stateRef: "forged-state-ref",
     };
-    const input: UserPluginInstallationInput = callerValue;
+    const input: PluginInstallationInput = callerValue;
     const expected: UserPluginInstallation = {
       schemaVersion: 1,
       installationId: "installation-notes-v1",
@@ -48,7 +48,7 @@ describe("user plugin installations", () => {
 
   it("rejects a desired-state record without a content-addressed manifest digest", async () => {
     const owner = exports.UserDurableObject.getByName("plugin-installation-invalid-digest");
-    const input: UserPluginInstallationInput = {
+    const input: PluginInstallationInput = {
       installationId: "installation-invalid-digest",
       pluginId: "example.invalid-digest",
       packageVersion: "1.0.0",
@@ -67,7 +67,7 @@ describe("user plugin installations", () => {
 
   it("appends a host-owned audit event for every desired-state upsert", async () => {
     let owner = exports.UserDurableObject.getByName("plugin-installation-audit-owner");
-    const first: UserPluginInstallationInput = {
+    const first: PluginInstallationInput = {
       installationId: "installation-notes-v1",
       pluginId: "example.notes",
       packageVersion: "1.0.0",
@@ -76,7 +76,7 @@ describe("user plugin installations", () => {
       grantedCapabilities: ["ui.panel"],
       config: null,
     };
-    const second: UserPluginInstallationInput = {
+    const second: PluginInstallationInput = {
       ...first,
       installationId: "installation-notes-v2",
       packageVersion: "2.0.0",

@@ -19,6 +19,11 @@ export default defineConfig({
     cloudflareTest({
       main: "./src/server.ts",
       remoteBindings: false,
+      miniflare: {
+        bindings: {
+          ADMINS: ["deploymentpluginadmin", "deploymentpluginrejectadmin"],
+        },
+      },
       wrangler: {
         configPath: "./wrangler.jsonc",
       },

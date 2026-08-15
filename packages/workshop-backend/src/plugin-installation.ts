@@ -9,8 +9,8 @@ export type PluginConfigurationValue =
   null | boolean | number | string | PluginConfigurationValue[] |
   { [key: string]: PluginConfigurationValue };
 
-/** Resolved plugin desired state accepted from trusted backend code. */
-export interface UserPluginInstallationInput {
+/** Scope-neutral plugin desired state accepted from trusted backend code. */
+export interface PluginInstallationInput {
   /** Stable identifier for this installation lifecycle. */
   installationId: string;
 
@@ -34,7 +34,7 @@ export interface UserPluginInstallationInput {
 }
 
 /** Desired state persisted by one UserDurableObject. */
-export interface UserPluginInstallation extends UserPluginInstallationInput {
+export interface UserPluginInstallation extends PluginInstallationInput {
   /** Schema version for the stored installation record. */
   schemaVersion: 1;
 
@@ -49,7 +49,7 @@ export interface UserPluginInstallation extends UserPluginInstallationInput {
 }
 
 /** Desired state persisted by one workspace OverseerDurableObject. */
-export interface WorkspacePluginInstallationRecord extends UserPluginInstallationInput {
+export interface WorkspacePluginInstallationRecord extends PluginInstallationInput {
   /** Schema version for the stored installation record. */
   schemaVersion: 1;
 
@@ -64,6 +64,93 @@ export interface WorkspacePluginInstallationRecord extends UserPluginInstallatio
 
   /** Opaque host-managed reference to optional plugin-owned persistent state. */
   stateRef?: string;
+}
+
+/** Desired state persisted by the deployment AdminSettings Durable Object. */
+export interface DeploymentPluginInstallationRecord extends PluginInstallationInput {
+  /** Schema version for the stored installation record. */
+  schemaVersion: 1;
+
+  /** Ownership scope stamped by AdminSettings. */
+  scope: "deployment";
+
+  /** Durable Object ID of the AdminSettings singleton that owns this record. */
+  targetId: string;
+
+  /** Opaque host-managed reference to optional plugin-owned persistent state. */
+  stateRef?: string;
+}
+
+/** Authenticated deployment administrator stamped into trusted host mutations. */
+export interface PluginMutationActor {
+  /** Durable Object ID of the authenticated user. */
+  userId: string;
+
+  /** Stable profile identifier used by the authenticated session. */
+  profileId: string;
+}
+
+/** Verified manifest fields accepted by the AdminSettings persistence boundary. */
+export interface PutDeploymentPluginInstallationInput {
+  /** Stable package identifier from the verified manifest. */
+  pluginId: string;
+
+  /** Exact package version from the verified manifest. */
+  packageVersion: string;
+
+  /** Content-addressed digest from the verified manifest. */
+  manifestDigest: string;
+
+  /** Capabilities requested by the verified manifest and approved by the administrator. */
+  grantedCapabilities: string[];
+
+  /** Authenticated administrator captured when the AdminApi capability was minted. */
+  actor: PluginMutationActor;
+}
+
+/** Host-owned append-only evidence of one deployment plugin desired-state mutation. */
+export interface DeploymentPluginAuditEvent {
+  /** Schema version for the stored audit event. */
+  schemaVersion: 1;
+
+  /** Monotonic sequence within the deployment. */
+  sequence: number;
+
+  /** Mutation recorded by this event. */
+  action: "PLUGIN_DESIRED_STATE_PUT";
+
+  /** UserDurableObject ID of the authenticated administrator. */
+  actorUserId: string;
+
+  /** Stable profile identifier of the authenticated administrator. */
+  actorProfileId: string;
+
+  /** Authority used for the mutation. */
+  authority: "admin";
+
+  /** Ownership scope stamped by AdminSettings. */
+  scope: "deployment";
+
+  /** Durable Object ID of the AdminSettings singleton that owns this event. */
+  targetId: string;
+
+  /** Host-issued identifier for the installation lifecycle. */
+  installationId: string;
+
+  /** Stable package identifier from the verified manifest. */
+  pluginId: string;
+
+  /** Exact package version from the verified manifest. */
+  packageVersion: string;
+
+  /** Content-addressed digest from the verified manifest. */
+  manifestDigest: string;
+
+  /** Capabilities granted to the exact manifest after the mutation. */
+  grantedCapabilities: string[];
+
+  /** Host timestamp in milliseconds since the Unix epoch. */
+  recordedAt: number;
 }
 
 /** Host-owned append-only evidence of one workspace plugin desired-state mutation. */

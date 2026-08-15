@@ -1,4 +1,4 @@
-import { AdminApi, AdminFormat, AdminFormatPatch, AdminResourceVendor, AdminSettingsView, AmbientGatekeeperMode, BannerColor, BlueprintPublicInfo, MAX_ANNOUNCEMENT_LENGTH, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_SITE_NAME_LENGTH, isAmbientGatekeeperMode, isBannerColor, isHexColor } from '@gadgets/workshop-shared/api';
+import { AdminApi, AdminFormat, AdminFormatPatch, AdminResourceVendor, AdminSettingsView, AmbientGatekeeperMode, BannerColor, BlueprintPublicInfo, MAX_ANNOUNCEMENT_LENGTH, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_SITE_NAME_LENGTH, isAmbientGatekeeperMode, isBannerColor, isHexColor, type InstallPluginRequest, type InstallPluginResult } from '@gadgets/workshop-shared/api';
 import { GatekeeperVendor } from '@gadgets/workshop-shared/gatekeeper';
 import { DurableObject } from 'cloudflare:workers';
 import { RpcTarget } from 'capnweb';
@@ -13,6 +13,15 @@ import { buildGatekeeperVendorMap } from './auth/auth-vendors.js';
 import { UserDurableObject } from './user.js';
 import { formatBlueprintsManifestVersion, installFormatBlueprints } from './format-blueprints.js';
 import { FORMAT_BLUEPRINTS } from './generated/format-blueprints.js';
+import type { PluginManifestResolver } from './plugin-manifest-registry.js';
+import {
+  isCanonicalPluginManifestDigest,
+  resolveApprovedPluginManifest,
+  type DeploymentPluginAuditEvent,
+  type DeploymentPluginInstallationRecord,
+  type PluginMutationActor,
+  type PutDeploymentPluginInstallationInput,
+} from './plugin-installation.js';
 
 const logger = createWorkshopLogger("workshop.admin.settings");
 
@@ -23,6 +32,12 @@ function makeAdminSettingsStorage(storage: DurableObjectStorage) {
       // authoritative featured bit; this DO keeps the publishable deployment-wide copy.
       featuredBlueprints: collection<BlueprintPublicInfo>()({
         primaryKey: 'id',
+      }),
+      deploymentPluginInstallations: collection<DeploymentPluginInstallationRecord>()({
+        primaryKey: 'pluginId',
+      }),
+      deploymentPluginAuditEvents: collection<DeploymentPluginAuditEvent>()({
+        primaryKey: 'sequence',
       }),
     },
     singletons: {
@@ -40,6 +55,9 @@ function makeAdminSettingsStorage(storage: DurableObjectStorage) {
       // exactly once per blueprint: an admin who then removes a format keeps it removed, while a
       // deployment that installed before curation existed still gets promoted.
       promotedFormatBlueprints: <string[]>[],
+
+      // Monotonic sequence for the deployment plugin audit collection.
+      nextDeploymentPluginAuditSequence: 0,
     },
   });
 }
@@ -49,9 +67,9 @@ type AdminSettingsStorage = ReturnType<typeof makeAdminSettingsStorage>;
 // Deployment-wide admin settings singleton.
 //
 // This durable object is always addressed as `getByName("")`. It contains settings that only
-// admins may modify. Settings modified through this DO are published to KV so that user requests
-// do not have to access the AdminSettings DO directly (which they could otherwise overload), but
-// having a singleton DO writing to KV avoids race conditions when updating KV.
+// admins may modify. Its AdminConfig is published to KV so user requests do not have to access this
+// singleton directly (which they could otherwise overload); plugin desired state and audit remain
+// solely in this DO's typed storage.
 export class AdminSettings extends DurableObject<Cloudflare.Env> {
   private storage: AdminSettingsStorage;
   private users: DurableObjectNamespace<UserDurableObject>;
@@ -71,6 +89,66 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
     this.storage = makeAdminSettingsStorage(ctx.storage);
     this.users = this.ctx.exports.UserDurableObject;
     this.vendors = buildGatekeeperVendorMap(env);
+  }
+
+  /** Lists deployment plugin desired state for trusted host orchestration and tests. */
+  async listDeploymentPluginInstallationsForHost():
+      Promise<DeploymentPluginInstallationRecord[]> {
+    return Array.from(this.storage.deploymentPluginInstallations.list());
+  }
+
+  /** Lists deployment plugin audit events for trusted host orchestration and tests. */
+  async listDeploymentPluginAuditEventsForHost(): Promise<DeploymentPluginAuditEvent[]> {
+    return Array.from(this.storage.deploymentPluginAuditEvents.list());
+  }
+
+  /** Persists verified deployment plugin desired state and its audit event atomically. */
+  async putDeploymentPluginInstallation(
+      input: PutDeploymentPluginInstallationInput): Promise<{installationId: string}> {
+    if (!isCanonicalPluginManifestDigest(input.manifestDigest)) {
+      throw new Error("Verified deployment plugin manifest has an invalid digest.");
+    }
+
+    let installationId = "";
+    this.ctx.storage.transactionSync(() => {
+      const existing = this.storage.deploymentPluginInstallations.get(input.pluginId);
+      const targetId = this.ctx.id.toString();
+      const installation: DeploymentPluginInstallationRecord = {
+        schemaVersion: 1,
+        installationId: existing?.installationId ?? crypto.randomUUID(),
+        scope: "deployment",
+        targetId,
+        pluginId: input.pluginId,
+        packageVersion: input.packageVersion,
+        manifestDigest: input.manifestDigest,
+        enabled: true,
+        grantedCapabilities: [...input.grantedCapabilities],
+        config: existing?.config ?? null,
+        ...(existing?.stateRef === undefined ? {} : {stateRef: existing.stateRef}),
+      };
+      const sequence = this.storage.nextDeploymentPluginAuditSequence.get();
+      const event: DeploymentPluginAuditEvent = {
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_DESIRED_STATE_PUT",
+        actorUserId: input.actor.userId,
+        actorProfileId: input.actor.profileId,
+        authority: "admin",
+        scope: "deployment",
+        targetId,
+        installationId: installation.installationId,
+        pluginId: installation.pluginId,
+        packageVersion: installation.packageVersion,
+        manifestDigest: installation.manifestDigest,
+        grantedCapabilities: [...installation.grantedCapabilities],
+        recordedAt: Date.now(),
+      };
+      this.storage.deploymentPluginInstallations.put(installation);
+      this.storage.deploymentPluginAuditEvents.put(event);
+      this.storage.nextDeploymentPluginAuditSequence.put(sequence + 1);
+      installationId = installation.installationId;
+    });
+    return {installationId};
   }
 
   // Install the format blueprints bundled with this deployment, if that hasn't already happened
@@ -552,14 +630,33 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
 // connector/resource availability; authentication config stays env-var driven.
 @validateRpc()
 export class AdminApiImpl extends RpcTarget implements AdminApi {
-  // `adminUserId` is the requesting admin's identity, forwarded to gatekeepers when listing the
-  // resource catalog (some are RBAC-gated per user). It's plain data — not a user-DO dependency.
-  constructor(private admin: DurableObjectStub<AdminSettings>, private adminUserId: string) {
+  // The actor is captured when the admin capability is minted. Its profile id is forwarded to
+  // RBAC-gated gatekeepers; both ids are stamped into plugin audit events as plain host data.
+  constructor(
+      private admin: DurableObjectStub<AdminSettings>,
+      private actor: PluginMutationActor,
+      private pluginManifests: Promise<PluginManifestResolver>,
+  ) {
     super();
   }
 
   getSettings(): Promise<AdminSettingsView> {
-    return this.admin.getSettings(this.adminUserId);
+    return this.admin.getSettings(this.actor.profileId);
+  }
+
+  async installDeploymentPlugin(request: InstallPluginRequest): Promise<InstallPluginResult> {
+    const resolver = await this.pluginManifests;
+    const resolved = await resolveApprovedPluginManifest(resolver, request);
+    if (!resolved.ok) return resolved;
+    const manifest = resolved.manifest;
+    const {installationId} = await this.admin.putDeploymentPluginInstallation({
+      pluginId: manifest.pluginId,
+      packageVersion: manifest.packageVersion,
+      manifestDigest: manifest.manifestDigest,
+      grantedCapabilities: [...manifest.requestedCapabilities],
+      actor: this.actor,
+    });
+    return {ok: true, installationId};
   }
 
   async setSignupsEnabled(enabled: boolean): Promise<void> {

@@ -19,7 +19,7 @@ import {
   type PutUserPluginInstallationResult,
   type UserPluginAuditEvent,
   type UserPluginInstallation,
-  type UserPluginInstallationInput,
+  type PluginInstallationInput,
 } from "./plugin-installation.js";
 
 const logger = createWorkshopLogger("workshop.user");
@@ -658,7 +658,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
 
   /** Persists resolved plugin desired state received through the trusted backend boundary. */
   async putUserPluginInstallation(
-      input: UserPluginInstallationInput): Promise<PutUserPluginInstallationResult> {
+      input: PluginInstallationInput): Promise<PutUserPluginInstallationResult> {
     if (!isCanonicalPluginManifestDigest(input.manifestDigest)) {
       return {ok: false, error: "INVALID_MANIFEST_DIGEST"};
     }

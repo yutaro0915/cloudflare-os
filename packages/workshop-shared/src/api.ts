@@ -901,6 +901,9 @@ export interface AdminApi {
   // Read all admin-managed settings for the admin UI in one call.
   getSettings(): Promise<AdminSettingsView>;
 
+  /** Install one exact deployment-scoped plugin after manifest and approval verification. */
+  installDeploymentPlugin(request: InstallPluginRequest): Promise<InstallPluginResult>;
+
   // Enable or disable new account signups. Existing users can still log in while signups are closed.
   setSignupsEnabled(enabled: boolean): Promise<void>;
 
