@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -213,6 +214,9 @@ test("builds schema v3 with a fixed Dynamic Worker artifact descriptor", async (
   const sourceDir = join(root, "input");
   const outFile = join(root, "generated", "plugin-manifests.ts");
   await mkdir(sourceDir);
+  const code = `export default { handshake() { return "ok"; } }; // 雪\n`;
+  const codeArtifactDigest = `sha256:${createHash("sha256").update(code).digest("hex")}`;
+  await writeFile(join(sourceDir, "runtime.js"), code);
   await writeFile(join(sourceDir, "runtime.json"), JSON.stringify({
     schemaVersion: 3,
     pluginId: "example.runtime",
@@ -221,8 +225,7 @@ test("builds schema v3 with a fixed Dynamic Worker artifact descriptor", async (
     dependencies: [],
     runtime: {
       kind: "dynamic-worker",
-      codeArtifactDigest:
-        "sha256:5b056b8472e4c36854cb9fdaa5c173b5dada6ddf49e86006c5851eff8091e8c8",
+      codeArtifactDigest,
     },
   }));
 
@@ -231,7 +234,50 @@ test("builds schema v3 with a fixed Dynamic Worker artifact descriptor", async (
   const generated = await readFile(outFile, "utf8");
   assert.match(generated, /"schemaVersion": 3/);
   assert.match(generated, /"kind": "dynamic-worker"/);
-  assert.match(generated, /"codeArtifactDigest": "sha256:5b056b/);
+  assert.match(generated, new RegExp(`"codeArtifactDigest": "${codeArtifactDigest}"`));
+  const artifactLiteral = generated.match(
+    /export const BUNDLED_PLUGIN_CODE_ARTIFACTS = ([\s\S]*?) as const;/,
+  )?.[1];
+  assert.ok(artifactLiteral, "generated module should contain the artifact map");
+  assert.deepEqual(JSON.parse(artifactLiteral), {[codeArtifactDigest]: code});
+});
+
+test("rejects missing or changed code referenced by a schema v3 manifest", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "plugin-manifests-artifact-integrity-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const sourceDir = join(root, "input");
+  const outFile = join(root, "generated", "plugin-manifests.ts");
+  await mkdir(sourceDir);
+  const original = `export default { handshake() {} };\n`;
+  const digest = `sha256:${createHash("sha256").update(original).digest("hex")}`;
+  await writeFile(join(sourceDir, "runtime.json"), JSON.stringify({
+    schemaVersion: 3,
+    pluginId: "example.runtime",
+    packageVersion: "1.0.0",
+    requestedCapabilities: [],
+    dependencies: [],
+    runtime: {kind: "dynamic-worker", codeArtifactDigest: digest},
+  }));
+
+  await assert.rejects(runBuild(sourceDir, outFile), /code artifact not found/);
+  await writeFile(join(sourceDir, "runtime.js"), `${original}// changed`);
+  await assert.rejects(runBuild(sourceDir, outFile), /code artifact not found/);
+});
+
+test("rejects BOM and malformed UTF-8 before hashing plugin source", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "plugin-manifests-utf8-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const sourceDir = join(root, "input");
+  const outFile = join(root, "generated", "plugin-manifests.ts");
+  await mkdir(sourceDir);
+
+  await writeFile(join(sourceDir, "runtime.js"), Uint8Array.from([
+    0xef, 0xbb, 0xbf, ...Buffer.from("export default {};"),
+  ]));
+  await assert.rejects(runBuild(sourceDir, outFile), /must not start with a UTF-8 BOM/);
+
+  await writeFile(join(sourceDir, "runtime.js"), Uint8Array.from([0xc3, 0x28]));
+  await assert.rejects(runBuild(sourceDir, outFile), /must be valid UTF-8/);
 });
 
 test("rejects malformed schema v3 runtime descriptors", async (t) => {
