@@ -285,8 +285,8 @@ function isOpenGadgetErrorCode(value: unknown): value is OpenGadgetErrorCode {
       value === OPEN_GADGET_ERROR_CODES.workspaceAccessDenied;
 }
 
-/** Foreground approval for installing one exact user-scoped plugin version. */
-export interface InstallUserPluginRequest {
+/** Foreground approval for installing one exact plugin version into an authorized scope. */
+export interface InstallPluginRequest {
   /** Stable package identifier to resolve. */
   pluginId: string;
 
@@ -297,8 +297,8 @@ export interface InstallUserPluginRequest {
   approvedCapabilities: string[];
 }
 
-/** Result of resolving and persisting one user-scoped plugin installation. */
-export type InstallUserPluginResult = {
+/** Result of resolving and persisting one plugin installation. */
+export type InstallPluginResult = {
   /** The verified desired state and its audit event were persisted. */
   ok: true;
 
@@ -310,6 +310,21 @@ export type InstallUserPluginResult = {
 
   /** Stable reason the authenticated user can correct. */
   error: "PLUGIN_VERSION_NOT_FOUND" | "CAPABILITY_APPROVAL_MISMATCH";
+};
+
+/** User-scoped install request accepted by `AuthenticatedApi.installUserPlugin()`. */
+export type InstallUserPluginRequest = InstallPluginRequest;
+
+/** User-scoped install result returned by `AuthenticatedApi.installUserPlugin()`. */
+export type InstallUserPluginResult = InstallPluginResult;
+
+/** Workspace-scoped install result returned by `Overseer.installWorkspacePlugin()`. */
+export type InstallWorkspacePluginResult = InstallPluginResult | {
+  /** The build collaborator request was rejected without changing desired state. */
+  ok: false;
+
+  /** The manifest exceeds the capability ceiling most recently approved by the owner. */
+  error: "CAPABILITY_OWNER_APPROVAL_REQUIRED";
 };
 
 // Top-level API exposed to the user after they have authenticated.
@@ -1516,6 +1531,9 @@ export type AgentSpawnerConfig = {
 export interface Overseer extends RpcTarget {
   // Get metadata describing this workspace.
   getMetadata(): Promise<GadgetMetadata>;
+
+  /** Install or update one exact workspace plugin through this role-gated session. */
+  installWorkspacePlugin(request: InstallPluginRequest): Promise<InstallWorkspacePluginResult>;
 
   // Get metadata describing this workspace and subscribe to changes.
   //

@@ -1,6 +1,6 @@
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
-import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, type AgentDefinition, type AgentBindingRef } from '@gadgets/workshop-shared/api';
+import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, type AgentDefinition, type AgentBindingRef, type InstallPluginRequest, type InstallWorkspacePluginResult } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, HookInitiator, ResourceDescription, ApprovalQueue, ActionDescription, ObservationAuthorizer, ObservationDescription, VendorDescription, SupportedResource, resolveRequestedResource, HookController, HookDescription, AGENT_CATALOG_MAX_ENTRIES, ActionKind } from "@gadgets/workshop-shared/gatekeeper";
 import {
   DurableObject, WorkerEntrypoint, RpcStub as NativeRpcStub,
@@ -46,6 +46,12 @@ import {
   validateChatAttachmentUpload,
 } from "./chat-attachment-validation";
 import { renderGadgetPdf } from "./browser-export";
+import { bundledPluginManifestResolver } from "./bundled-plugin-manifests.js";
+import {
+  resolveApprovedPluginManifest,
+  type WorkspacePluginAuditEvent,
+  type WorkspacePluginInstallationRecord,
+} from "./plugin-installation.js";
 
 const logger = createWorkshopLogger("workshop.overseer");
 export const AGENT_RUNNING_ERROR_MESSAGE = "Agent is running, wait for it to finish.";
@@ -724,6 +730,7 @@ function makeOverseerStorage(storage: DurableObjectStorage) {
       nextGatekeeperId: 0,
 
       nextActionId: 0,
+      nextWorkspacePluginAuditSequence: 0,
       nextChatId: 0,
       nextHookId: 0,
 
@@ -787,6 +794,14 @@ function makeOverseerStorage(storage: DurableObjectStorage) {
 
       actions: collection<ActionRecord>()({
         primaryKey: "id"
+      }),
+
+      workspacePluginInstallations: collection<WorkspacePluginInstallationRecord>()({
+        primaryKey: "pluginId",
+      }),
+
+      workspacePluginAuditEvents: collection<WorkspacePluginAuditEvent>()({
+        primaryKey: "sequence",
       }),
 
       boundHooks: collection<BoundHookRecord>()({
@@ -6426,6 +6441,16 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     return this.impl.outputsSnapshot();
   }
 
+  /** Lists workspace plugin desired state for trusted host orchestration and tests. */
+  async listWorkspacePluginInstallationsForHost(): Promise<WorkspacePluginInstallationRecord[]> {
+    return Array.from(this.impl.storage.workspacePluginInstallations.list());
+  }
+
+  /** Lists workspace plugin audit events for trusted host orchestration and tests. */
+  async listWorkspacePluginAuditEventsForHost(): Promise<WorkspacePluginAuditEvent[]> {
+    return Array.from(this.impl.storage.workspacePluginAuditEvents.list());
+  }
+
   // `notifyClosed` should be invoked when the return `Overseer` stub is disposed, which is used
   // by AuthenticatedApiImpl.#openGadgetInternal() to detect Durable Object disconnects.
   async open(userId: string, profileId: string,
@@ -7223,7 +7248,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
               private owner: DurableObjectStub<UserDurableObject>,
               private clientUser: DurableObjectStub<UserDurableObject>,
               private clientProfileId: string,
-              clientUserId: string,
+              private clientUserId: string,
               private isOwner: boolean,
               private notifyClosed: NativeRpcStub<() => void>,
               // Ambient capsule reconciliation started during open(); listSlashCommands() waits for
@@ -7274,6 +7299,71 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     if (!this.isOwner) {
       result.owner = await this.owner.whoami();
     }
+    return result;
+  }
+
+  async installWorkspacePlugin(
+      request: InstallPluginRequest): Promise<InstallWorkspacePluginResult> {
+    const resolver = await bundledPluginManifestResolver;
+    const resolved = await resolveApprovedPluginManifest(resolver, request);
+    if (!resolved.ok) return resolved;
+    const manifest = resolved.manifest;
+    let result: InstallWorkspacePluginResult = {
+      ok: false,
+      error: "CAPABILITY_OWNER_APPROVAL_REQUIRED",
+    };
+
+    this.impl.ctx.storage.transactionSync(() => {
+      const existing = this.impl.storage.workspacePluginInstallations.get(manifest.pluginId);
+      const approvedCapabilities = this.isOwner
+        ? [...manifest.requestedCapabilities]
+        : [...(existing?.approvedCapabilities ?? [])];
+      const approved = new Set(approvedCapabilities);
+      if (
+        !this.isOwner &&
+        !manifest.requestedCapabilities.every(capability => approved.has(capability))
+      ) {
+        return;
+      }
+
+      const targetId = this.impl.ctx.id.toString();
+      const installation: WorkspacePluginInstallationRecord = {
+        schemaVersion: 1,
+        installationId: existing?.installationId ?? crypto.randomUUID(),
+        scope: "workspace",
+        targetId,
+        pluginId: manifest.pluginId,
+        packageVersion: manifest.packageVersion,
+        manifestDigest: manifest.manifestDigest,
+        enabled: true,
+        approvedCapabilities,
+        grantedCapabilities: [...manifest.requestedCapabilities],
+        config: existing?.config ?? null,
+        ...(existing?.stateRef === undefined ? {} : {stateRef: existing.stateRef}),
+      };
+      const sequence = this.impl.storage.nextWorkspacePluginAuditSequence.get();
+      const event: WorkspacePluginAuditEvent = {
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_DESIRED_STATE_PUT",
+        actorUserId: this.clientUserId,
+        actorProfileId: this.clientProfileId,
+        authority: this.isOwner ? "owner" : "build",
+        scope: "workspace",
+        targetId,
+        installationId: installation.installationId,
+        pluginId: installation.pluginId,
+        packageVersion: installation.packageVersion,
+        manifestDigest: installation.manifestDigest,
+        approvedCapabilities: [...installation.approvedCapabilities],
+        grantedCapabilities: [...installation.grantedCapabilities],
+        recordedAt: Date.now(),
+      };
+      this.impl.storage.workspacePluginInstallations.put(installation);
+      this.impl.storage.workspacePluginAuditEvents.put(event);
+      this.impl.storage.nextWorkspacePluginAuditSequence.put(sequence + 1);
+      result = {ok: true, installationId: installation.installationId};
+    });
     return result;
   }
 
@@ -8913,6 +9003,11 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
       role: "use",
       defaultGadgetId: this.impl.defaultGadgetId,
     };
+  }
+
+  async installWorkspacePlugin(
+      _request: InstallPluginRequest): Promise<InstallWorkspacePluginResult> {
+    this.#deny();
   }
 
   async subscribeToMetadata(

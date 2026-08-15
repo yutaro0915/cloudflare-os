@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "pluginId": "test.notes",
+  "packageVersion": "1.3.0",
+  "requestedCapabilities": [
+    "ui.panel"
+  ]
+}

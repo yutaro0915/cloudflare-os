@@ -31,26 +31,15 @@ import { verifyCfAccessJwt } from "./access.js";
 import { resolveUiFeatureFlags } from "./feature-flags";
 import { serveSiteLogo, SITE_LOGO_PATH } from "./site-logo.js";
 import { createWorkshopLogger } from "./observability";
-import {
-  BundledPluginManifestResolver,
-  type PluginManifestResolver,
-} from "./plugin-manifest-registry.js";
-import { BUNDLED_PLUGIN_MANIFESTS } from "./generated/plugin-manifests.js";
+import type { PluginManifestResolver } from "./plugin-manifest-registry.js";
+import { resolveApprovedPluginManifest } from "./plugin-installation.js";
+import { bundledPluginManifestResolver } from "./bundled-plugin-manifests.js";
 
 const logger = createWorkshopLogger("workshop.server");
 
 // Set once we've asked the AdminSettings DO to install the bundled format blueprints (see the
 // fetch handler), so later requests skip the call. The DO holds the real answer.
 let formatBlueprintInstallStarted = false;
-const pluginManifestResolver = BundledPluginManifestResolver.create(BUNDLED_PLUGIN_MANIFESTS);
-
-function approvalsExactlyMatch(
-    requested: readonly string[], approved: readonly string[]): boolean {
-  if (requested.length !== approved.length) return false;
-  const approvedSet = new Set(approved);
-  return approvedSet.size === approved.length &&
-    requested.every(capability => approvedSet.has(capability));
-}
 
 function publicBlueprintInfo(id: string, metadata: BlueprintPublicInfo['metadata']): BlueprintPublicInfo {
   return {
@@ -130,14 +119,9 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   async installUserPlugin(
       request: InstallUserPluginRequest): Promise<InstallUserPluginResult> {
     const resolver = await this.pluginManifests;
-    const manifest = await resolver.resolve(request.pluginId, request.packageVersion);
-    if (manifest === null) return {ok: false, error: "PLUGIN_VERSION_NOT_FOUND"};
-    if (!approvalsExactlyMatch(
-      manifest.requestedCapabilities,
-      request.approvedCapabilities,
-    )) {
-      return {ok: false, error: "CAPABILITY_APPROVAL_MISMATCH"};
-    }
+    const resolved = await resolveApprovedPluginManifest(resolver, request);
+    if (!resolved.ok) return resolved;
+    const manifest = resolved.manifest;
 
     const installationId = crypto.randomUUID();
     const result = await this.user.putUserPluginInstallation({
@@ -988,7 +972,7 @@ export default {
       };
 
       resp = await newWorkersRpcResponse(req,
-          new PublicApiImpl(ctx, env, abortSession, pluginManifestResolver, accessPayload));
+          new PublicApiImpl(ctx, env, abortSession, bundledPluginManifestResolver, accessPayload));
 
       if (aborted) {
         // Oops, we missed the abortSession() call while awaiting, apply now.
