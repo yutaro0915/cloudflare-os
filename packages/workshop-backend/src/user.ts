@@ -14,7 +14,12 @@ import { isReservedBlueprintKey, readBlueprintKvRecord } from "./blueprint-archi
 import { filterEnabledResources, isResourceDisabled, readAdminConfig } from "./admin-config.js";
 import { buildGatekeeperVendorMap } from "./auth/auth-vendors.js";
 import { createSkillDefinition, validateAgentDefinition, validateSkillDefinition, type AgentDefinitionSnapshot } from "./agent-definition.js";
-import type { UserPluginInstallation, UserPluginInstallationInput } from "./plugin-installation.js";
+import {
+  isCanonicalPluginManifestDigest,
+  type PutUserPluginInstallationResult,
+  type UserPluginInstallation,
+  type UserPluginInstallationInput,
+} from "./plugin-installation.js";
 
 const logger = createWorkshopLogger("workshop.user");
 
@@ -642,7 +647,11 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   /** Persists resolved plugin desired state received through the trusted backend boundary. */
-  async putUserPluginInstallation(input: UserPluginInstallationInput): Promise<void> {
+  async putUserPluginInstallation(
+      input: UserPluginInstallationInput): Promise<PutUserPluginInstallationResult> {
+    if (!isCanonicalPluginManifestDigest(input.manifestDigest)) {
+      return {ok: false, error: "INVALID_MANIFEST_DIGEST"};
+    }
     const installation: UserPluginInstallation = {
       schemaVersion: 1,
       installationId: input.installationId,
@@ -656,6 +665,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       config: input.config,
     };
     this.storage.pluginInstallations.put(installation);
+    return {ok: true};
   }
 
   async listSkillDefinitions(): Promise<SkillDefinition[]> {

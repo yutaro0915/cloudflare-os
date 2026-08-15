@@ -41,3 +41,20 @@ export interface UserPluginInstallation extends UserPluginInstallationInput {
   /** Opaque host-managed reference to optional plugin-owned persistent state. */
   stateRef?: string;
 }
+
+/** Result of persisting resolved user-scoped plugin desired state. */
+export type PutUserPluginInstallationResult = {
+  /** The desired state was persisted. */
+  ok: true;
+} | {
+  /** The desired state was rejected without being persisted. */
+  ok: false;
+
+  /** Stable machine-readable reason for the rejection. */
+  error: "INVALID_MANIFEST_DIGEST";
+};
+
+/** Returns whether a manifest digest is in canonical content-addressed form. */
+export function isCanonicalPluginManifestDigest(digest: string): boolean {
+  return /^sha256:[0-9a-f]{64}$/.test(digest);
+}

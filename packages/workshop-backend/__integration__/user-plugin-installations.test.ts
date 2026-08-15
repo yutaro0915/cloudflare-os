@@ -36,7 +36,7 @@ describe("user plugin installations", () => {
       config: { panel: "right" },
     };
 
-    await owner.putUserPluginInstallation(input);
+    await expect(owner.putUserPluginInstallation(input)).resolves.toEqual({ok: true});
 
     await abortAllDurableObjects();
     owner = exports.UserDurableObject.getByName("plugin-installation-owner");
@@ -44,5 +44,24 @@ describe("user plugin installations", () => {
 
     await expect(owner.listUserPluginInstallations()).resolves.toEqual([expected]);
     await expect(otherUser.listUserPluginInstallations()).resolves.toEqual([]);
+  });
+
+  it("rejects a desired-state record without a content-addressed manifest digest", async () => {
+    const owner = exports.UserDurableObject.getByName("plugin-installation-invalid-digest");
+    const input: UserPluginInstallationInput = {
+      installationId: "installation-invalid-digest",
+      pluginId: "example.invalid-digest",
+      packageVersion: "1.0.0",
+      manifestDigest: "latest",
+      enabled: true,
+      grantedCapabilities: [],
+      config: null,
+    };
+
+    await expect(owner.putUserPluginInstallation(input)).resolves.toEqual({
+      ok: false,
+      error: "INVALID_MANIFEST_DIGEST",
+    });
+    await expect(owner.listUserPluginInstallations()).resolves.toEqual([]);
   });
 });
