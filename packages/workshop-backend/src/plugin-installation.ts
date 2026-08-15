@@ -42,6 +42,48 @@ export interface UserPluginInstallation extends UserPluginInstallationInput {
   stateRef?: string;
 }
 
+/** Host-owned append-only evidence of one user plugin desired-state mutation. */
+export interface UserPluginAuditEvent {
+  /** Schema version for the stored audit event. */
+  schemaVersion: 1;
+
+  /** Monotonic sequence within the owning UserDurableObject. */
+  sequence: number;
+
+  /** Mutation recorded by this event. */
+  action: "PLUGIN_DESIRED_STATE_PUT";
+
+  /** UserDurableObject ID stamped as the authenticated actor. */
+  actorUserId: string;
+
+  /** Ownership scope stamped by UserDurableObject. */
+  scope: "user";
+
+  /** UserDurableObject ID stamped as the desired-state owner. */
+  targetId: string;
+
+  /** Host-issued identifier for the installation lifecycle. */
+  installationId: string;
+
+  /** Stable package identifier from the verified manifest. */
+  pluginId: string;
+
+  /** Exact package version from the verified manifest. */
+  packageVersion: string;
+
+  /** Content-addressed digest from the verified manifest. */
+  manifestDigest: string;
+
+  /** Desired enabled state written by the mutation. */
+  enabled: boolean;
+
+  /** Manifest capabilities approved for the installation. */
+  grantedCapabilities: string[];
+
+  /** Host timestamp in milliseconds since the Unix epoch. */
+  recordedAt: number;
+}
+
 /** Result of persisting resolved user-scoped plugin desired state. */
 export type PutUserPluginInstallationResult = {
   /** The desired state was persisted. */

@@ -17,6 +17,7 @@ import { createSkillDefinition, validateAgentDefinition, validateSkillDefinition
 import {
   isCanonicalPluginManifestDigest,
   type PutUserPluginInstallationResult,
+  type UserPluginAuditEvent,
   type UserPluginInstallation,
   type UserPluginInstallationInput,
 } from "./plugin-installation.js";
@@ -182,6 +183,9 @@ function makeUserStorage(storage: DurableObjectStorage) {
       pluginInstallations: collection<UserPluginInstallation>()({
         primaryKey: "pluginId",
       }),
+      pluginAuditEvents: collection<UserPluginAuditEvent>()({
+        primaryKey: "sequence",
+      }),
       gadgets: collection<GadgetRecord>()({
         primaryKey: "id"
       }),
@@ -222,6 +226,7 @@ function makeUserStorage(storage: DurableObjectStorage) {
       quickModel: <string | null>null,
       preferredModel: <string | null>null,
       onboardingCompleted: false,
+      nextPluginAuditSequence: 0,
 
       // Set once the user's pre-existing workspaces have been asked to populate the outputs index
       // (see #backfillOutputs()). Workspaces created since push on their own.
@@ -646,6 +651,11 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     return Array.from(this.storage.pluginInstallations.list());
   }
 
+  /** Lists host-owned plugin audit events in append order. */
+  async listUserPluginAuditEvents(): Promise<UserPluginAuditEvent[]> {
+    return Array.from(this.storage.pluginAuditEvents.list());
+  }
+
   /** Persists resolved plugin desired state received through the trusted backend boundary. */
   async putUserPluginInstallation(
       input: UserPluginInstallationInput): Promise<PutUserPluginInstallationResult> {
@@ -664,7 +674,27 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       grantedCapabilities: input.grantedCapabilities,
       config: input.config,
     };
-    this.storage.pluginInstallations.put(installation);
+    this.ctx.storage.transactionSync(() => {
+      const sequence = this.storage.nextPluginAuditSequence.get();
+      const event: UserPluginAuditEvent = {
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_DESIRED_STATE_PUT",
+        actorUserId: this.ctx.id.toString(),
+        scope: "user",
+        targetId: this.ctx.id.toString(),
+        installationId: installation.installationId,
+        pluginId: installation.pluginId,
+        packageVersion: installation.packageVersion,
+        manifestDigest: installation.manifestDigest,
+        enabled: installation.enabled,
+        grantedCapabilities: [...installation.grantedCapabilities],
+        recordedAt: Date.now(),
+      };
+      this.storage.pluginInstallations.put(installation);
+      this.storage.pluginAuditEvents.put(event);
+      this.storage.nextPluginAuditSequence.put(sequence + 1);
+    });
     return {ok: true};
   }
 

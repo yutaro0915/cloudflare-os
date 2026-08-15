@@ -64,4 +64,68 @@ describe("user plugin installations", () => {
     });
     await expect(owner.listUserPluginInstallations()).resolves.toEqual([]);
   });
+
+  it("appends a host-owned audit event for every desired-state upsert", async () => {
+    let owner = exports.UserDurableObject.getByName("plugin-installation-audit-owner");
+    const first: UserPluginInstallationInput = {
+      installationId: "installation-notes-v1",
+      pluginId: "example.notes",
+      packageVersion: "1.0.0",
+      manifestDigest: `sha256:${"a".repeat(64)}`,
+      enabled: true,
+      grantedCapabilities: ["ui.panel"],
+      config: null,
+    };
+    const second: UserPluginInstallationInput = {
+      ...first,
+      installationId: "installation-notes-v2",
+      packageVersion: "2.0.0",
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      grantedCapabilities: ["ui.panel", "agent.catalog.read"],
+    };
+
+    await expect(owner.putUserPluginInstallation(first)).resolves.toEqual({ok: true});
+    await expect(owner.putUserPluginInstallation(second)).resolves.toEqual({ok: true});
+
+    await abortAllDurableObjects();
+    owner = exports.UserDurableObject.getByName("plugin-installation-audit-owner");
+
+    const events = await owner.listUserPluginAuditEvents();
+    expect(events).toMatchObject([
+      {
+        schemaVersion: 1,
+        sequence: 0,
+        action: "PLUGIN_DESIRED_STATE_PUT",
+        actorUserId: owner.id.toString(),
+        scope: "user",
+        targetId: owner.id.toString(),
+        installationId: first.installationId,
+        pluginId: first.pluginId,
+        packageVersion: first.packageVersion,
+        manifestDigest: first.manifestDigest,
+        enabled: true,
+        grantedCapabilities: first.grantedCapabilities,
+        recordedAt: expect.any(Number),
+      },
+      {
+        schemaVersion: 1,
+        sequence: 1,
+        action: "PLUGIN_DESIRED_STATE_PUT",
+        actorUserId: owner.id.toString(),
+        scope: "user",
+        targetId: owner.id.toString(),
+        installationId: second.installationId,
+        pluginId: second.pluginId,
+        packageVersion: second.packageVersion,
+        manifestDigest: second.manifestDigest,
+        enabled: true,
+        grantedCapabilities: second.grantedCapabilities,
+        recordedAt: expect.any(Number),
+      },
+    ]);
+    expect(events[0]).not.toHaveProperty("config");
+    await expect(owner.listUserPluginInstallations()).resolves.toMatchObject([
+      {installationId: second.installationId, packageVersion: second.packageVersion},
+    ]);
+  });
 });
