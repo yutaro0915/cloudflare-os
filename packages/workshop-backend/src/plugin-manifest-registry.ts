@@ -35,6 +35,18 @@ export class BundledPluginManifestResolver implements PluginManifestResolver {
 
   /** Verifies raw bundled manifests and owns immutable snapshots of the results. */
   static async create(entries: readonly PluginManifest[]): Promise<BundledPluginManifestResolver> {
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index];
+      const duplicate = entries.slice(0, index).some(
+        candidate => candidate.pluginId === entry.pluginId &&
+          candidate.packageVersion === entry.packageVersion,
+      );
+      if (duplicate) {
+        throw new TypeError(
+          `Duplicate bundled plugin manifest: ${entry.pluginId}@${entry.packageVersion}`,
+        );
+      }
+    }
     const verified = await Promise.all(entries.map(verifyPluginManifest));
     return new BundledPluginManifestResolver(Object.freeze(verified));
   }

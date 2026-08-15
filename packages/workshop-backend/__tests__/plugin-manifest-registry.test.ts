@@ -78,4 +78,20 @@ describe("bundled plugin manifest resolver", () => {
     });
     await expect(resolver.resolve("forged.during-hash", "1.0.0")).resolves.toBeNull();
   });
+
+  it("rejects two manifests for the same exact package version", async () => {
+    const first: PluginManifest = {
+      schemaVersion: 1,
+      pluginId: "example.notes",
+      packageVersion: "1.0.0",
+      requestedCapabilities: ["ui.panel"],
+    };
+    const conflicting: PluginManifest = {
+      ...first,
+      requestedCapabilities: ["ui.panel", "agent.catalog.read"],
+    };
+
+    await expect(BundledPluginManifestResolver.create([first, conflicting]))
+      .rejects.toThrow("Duplicate bundled plugin manifest: example.notes@1.0.0");
+  });
 });
