@@ -14,6 +14,7 @@ import { isReservedBlueprintKey, readBlueprintKvRecord } from "./blueprint-archi
 import { filterEnabledResources, isResourceDisabled, readAdminConfig } from "./admin-config.js";
 import { buildGatekeeperVendorMap } from "./auth/auth-vendors.js";
 import { createSkillDefinition, validateAgentDefinition, validateSkillDefinition, type AgentDefinitionSnapshot } from "./agent-definition.js";
+import type { UserPluginInstallation, UserPluginInstallationInput } from "./plugin-installation.js";
 
 const logger = createWorkshopLogger("workshop.user");
 
@@ -172,6 +173,9 @@ function makeUserStorage(storage: DurableObjectStorage) {
         uniqueIndexes: {
           byName: (skill: SkillDefinition) => skill.name,
         },
+      }),
+      pluginInstallations: collection<UserPluginInstallation>()({
+        primaryKey: "pluginId",
       }),
       gadgets: collection<GadgetRecord>()({
         primaryKey: "id"
@@ -630,6 +634,28 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
 
   async listAgentDefinitions(): Promise<AgentDefinition[]> {
     return Array.from(this.storage.agentDefinitions.list());
+  }
+
+  /** Lists the plugin desired state owned by this user. */
+  async listUserPluginInstallations(): Promise<UserPluginInstallation[]> {
+    return Array.from(this.storage.pluginInstallations.list());
+  }
+
+  /** Persists resolved plugin desired state received through the trusted backend boundary. */
+  async putUserPluginInstallation(input: UserPluginInstallationInput): Promise<void> {
+    const installation: UserPluginInstallation = {
+      schemaVersion: 1,
+      installationId: input.installationId,
+      scope: "user",
+      targetId: this.ctx.id.toString(),
+      pluginId: input.pluginId,
+      packageVersion: input.packageVersion,
+      manifestDigest: input.manifestDigest,
+      enabled: input.enabled,
+      grantedCapabilities: input.grantedCapabilities,
+      config: input.config,
+    };
+    this.storage.pluginInstallations.put(installation);
   }
 
   async listSkillDefinitions(): Promise<SkillDefinition[]> {
