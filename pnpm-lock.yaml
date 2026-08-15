@@ -744,6 +744,9 @@ importers:
       capnweb-validate:
         specifier: 0.2.1
         version: 0.2.1(capnweb@0.8.0)(esbuild@0.28.1)(rollup@4.62.3)(typescript@5.9.3)(vite@7.3.6(@types/node@26.1.0)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(yaml@2.9.0))
+      cordis:
+        specifier: 4.0.0-rc.8
+        version: 4.0.0-rc.8
       diff:
         specifier: ^8.0.4
         version: 8.0.4
@@ -2759,6 +2762,21 @@ packages:
   cookie@1.1.1:
     resolution: {integrity: sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==}
     engines: {node: '>=18'}
+
+  cordis@4.0.0-rc.8:
+    resolution: {integrity: sha512-vXaYK6XZJlIFTnODp4Rd973Qnd/gm3cwFzWsMTaeu6cQQheA7N+aA0GqHRNl0cFIrxMXWU8dst1ZXHlUQvfyRw==}
+    hasBin: true
+    peerDependencies:
+      '@cordisjs/plugin-include': ^1.0.4
+      '@cordisjs/plugin-loader': ^1.0.0-rc.5
+    peerDependenciesMeta:
+      '@cordisjs/plugin-include':
+        optional: true
+      '@cordisjs/plugin-loader':
+        optional: true
+
+  cosmokit@1.8.1:
+    resolution: {integrity: sha512-PDBv4l90xZKrUsZ0vtoycgZpO/j4iFsqJXrAxsyBDsnQRI7ZMJXIjgDJsKNjd5L8jnVnnlrDCdhkFbTncgCVjQ==}
 
   core-js-pure@3.49.0:
     resolution: {integrity: sha512-XM4RFka59xATyJv/cS3O3Kml72hQXUeGRuuTmMYFxwzc9/7C8OYTaIR/Ji+Yt8DXzsFLNhat15cE/JP15HrCgw==}
@@ -6361,6 +6379,13 @@ snapshots:
   cookie-es@3.1.1: {}
 
   cookie@1.1.1: {}
+
+  cordis@4.0.0-rc.8:
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      cosmokit: 1.8.1
+
+  cosmokit@1.8.1: {}
 
   core-js-pure@3.49.0: {}
 

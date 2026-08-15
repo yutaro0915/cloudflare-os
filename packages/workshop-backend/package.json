@@ -19,15 +19,16 @@
     "import:format-blueprint": "node --experimental-strip-types --no-warnings scripts/import-format-blueprint.mjs"
   },
   "dependencies": {
+    "@cloudflare/puppeteer": "^1.2.0",
     "@earendil-works/pi-agent-core": "0.83.0",
     "@earendil-works/pi-ai": "0.83.0",
-    "@cloudflare/puppeteer": "^1.2.0",
     "@gadgets/backend-utils": "workspace:*",
     "@gadgets/error-reporting": "workspace:*",
     "@gadgets/typed-storage": "workspace:*",
     "@gadgets/workshop-shared": "workspace:*",
     "capnweb": "^0.8.0",
     "capnweb-validate": "0.2.1",
+    "cordis": "4.0.0-rc.8",
     "diff": "^8.0.4",
     "jose": "^6.2.5",
     "yaml": "^2.9.0",

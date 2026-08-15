@@ -25,12 +25,16 @@ export interface RuntimePluginPreflightFailure {
 /** Runtime boundary that atomically replaces or removes one isolated plugin activation. */
 export interface PluginRuntimeAdapter<Lease> {
   /**
-   * Prepare and commit `candidate`, replacing `previous` only on success. On rejection, candidate
-   * resources are cleaned up and `previous` remains usable.
+   * Prepare and commit `candidate`, replacing `previous` only on success. On rejection, the
+   * candidate is logically revoked, isolate-local cleanup debt remains owned by the adapter, and
+   * `previous` remains selected.
    */
   replace(candidate: RuntimePluginPlan, previous?: Lease): Promise<Lease>;
 
-  /** Revoke capabilities and teardown `active`; on rejection the lease remains retryable. */
+  /**
+   * Logically revokes `active` before teardown. It rejects only when revocation failed and the
+   * lease remains selected; isolate-local cleanup failure is retained and does not reject.
+   */
   remove(active: Lease): Promise<void>;
 }
 
