@@ -1,7 +1,7 @@
 import { RpcStub, RpcTarget, newWorkersRpcResponse } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import type { JWTPayload } from "jose";
-import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult, type MyBugReportsResult, type InstallUserPluginRequest, type InstallUserPluginResult, type UninstallUserPluginRequest, type UninstallUserPluginResult, type DetachedUserPluginStateSummary, type PurgeUserPluginStateRequest, type PurgeUserPluginStateResult } from '@gadgets/workshop-shared/api';
+import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult, type MyBugReportsResult, type InstallUserPluginRequest, type InstallUserPluginResult, type UninstallUserPluginRequest, type UninstallUserPluginResult, type DetachedUserPluginStateSummary, type PurgeUserPluginStateRequest, type PurgeUserPluginStateResult, type UserPluginCenterView, type OpenUserPluginUiFrameRequest, type OpenUserPluginUiFrameResult } from '@gadgets/workshop-shared/api';
 import { submitBugReportFlow, refreshBugReportStatuses, bugReportIssueUrl,
          BUG_REPORT_STATUS_CACHE_MS } from "./bug-report.js";
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
@@ -36,10 +36,19 @@ import { verifyCfAccessJwt } from "./access.js";
 import { resolveUiFeatureFlags } from "./feature-flags";
 import { serveSiteLogo, SITE_LOGO_PATH } from "./site-logo.js";
 import { createWorkshopLogger } from "./observability";
-import type { PluginManifestResolver } from "./plugin-manifest-registry.js";
-import { resolveApprovedPluginManifest } from "./plugin-installation.js";
+import type { PluginManifestCatalog } from "./plugin-manifest-registry.js";
+import {
+  resolveApprovedPluginManifest,
+} from "./plugin-installation.js";
 import { bundledPluginManifestResolver } from "./bundled-plugin-manifests.js";
 import { PluginStateDurableObject } from "./plugin-state.js";
+import { buildUserPluginCenterView } from "./user-plugin-center.js";
+import { bundledPluginCodeArtifactResolver } from "./bundled-plugin-artifacts.js";
+import { openUserPluginUiFrame } from "./open-user-plugin-ui-frame.js";
+import {
+  DynamicWorkerPluginUiRenderer,
+  WorkerLoaderPluginUiWorkerStarter,
+} from "./dynamic-worker-plugin-ui-renderer.js";
 
 const logger = createWorkshopLogger("workshop.server");
 
@@ -94,7 +103,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   constructor(private ctx: ExecutionContext, private env: Env,
       private user: DurableObjectStub<UserDurableObject>,
       private abortSession: (reason: Error) => void,
-      private pluginManifests: Promise<PluginManifestResolver>) {
+      private pluginManifests: Promise<PluginManifestCatalog>) {
     super();
 
     this.overseers = this.ctx.exports.OverseerDurableObject;
@@ -171,6 +180,30 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   async purgeUserPluginState(
       request: PurgeUserPluginStateRequest): Promise<PurgeUserPluginStateResult> {
     return this.user.purgeUserPluginState(request.installationId);
+  }
+  async getUserPluginCenter(): Promise<UserPluginCenterView> {
+    const [manifests, owner] = await Promise.all([
+      this.pluginManifests.then(catalog => catalog.list()),
+      this.user.readUserPluginCenterOwnerSnapshotForHost(),
+    ]);
+    return buildUserPluginCenterView({manifests, ...owner});
+  }
+  async openUserPluginUiFrame(
+      request: OpenUserPluginUiFrameRequest): Promise<OpenUserPluginUiFrameResult> {
+    const catalog = await this.pluginManifests;
+    const adminSettings = this.adminSettings.getByName("");
+    const renderer = new DynamicWorkerPluginUiRenderer(
+      new WorkerLoaderPluginUiWorkerStarter(this.env.LOADER),
+      bundledPluginCodeArtifactResolver,
+    );
+    return openUserPluginUiFrame(request, {
+      readInstallation: (pluginId, installationId) =>
+        this.user.readUserPluginUiInstallationForHost(pluginId, installationId),
+      resolveManifest: (pluginId, packageVersion) => catalog.resolve(pluginId, packageVersion),
+      isManifestDenied: manifestDigest =>
+        adminSettings.isPluginManifestDeniedForRuntimeHost(manifestDigest),
+      renderArtifact: codeArtifactDigest => renderer.render(codeArtifactDigest),
+    });
   }
   setOwnDisplayName(name: string): Promise<void> {
     return this.user.setOwnDisplayName(name);
@@ -779,7 +812,7 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
 
   constructor(private ctx: ExecutionContext, private env: Env,
       private abortSession: (reason: Error) => void,
-      private pluginManifests: Promise<PluginManifestResolver>,
+      private pluginManifests: Promise<PluginManifestCatalog>,
       private accessPayload?: JWTPayload) {
     super();
     this.users = this.ctx.exports.UserDurableObject;

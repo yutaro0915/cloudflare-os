@@ -33,6 +33,8 @@ import {
   type UserPluginStatePurge,
   type BeginUserPluginStatePurgeResult,
   type FinalizeUserPluginStatePurgeResult,
+  type UserPluginCenterOwnerSnapshot,
+  type UserPluginUiInstallationSnapshot,
 } from "./plugin-installation.js";
 
 const logger = createWorkshopLogger("workshop.user");
@@ -879,6 +881,54 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   /** Lists host-only detached records; browser projection must omit stateRef. */
   listDetachedUserPluginStatesForHost(): DetachedUserPluginStateRecord[] {
     return Array.from(this.storage.detachedPluginStates.list());
+  }
+
+  /** Reads the current plugin owner collections atomically for trusted projection only. */
+  readUserPluginCenterOwnerSnapshotForHost(): UserPluginCenterOwnerSnapshot {
+    return this.ctx.storage.transactionSync(() => ({
+      installations: Array.from(this.storage.pluginInstallations.list(), installation => ({
+        installationId: installation.installationId,
+        pluginId: installation.pluginId,
+        packageVersion: installation.packageVersion,
+        manifestDigest: installation.manifestDigest,
+        enabled: installation.enabled,
+        grantedCapabilities: [...installation.grantedCapabilities],
+        hasState: installation.stateRef !== undefined,
+      })),
+      uninstallingInstallationIds: Array.from(
+        this.storage.pluginRevocations.list(),
+        revocation => revocation.finalizedAt === undefined ? revocation.installationId : null,
+      ).filter(installationId => installationId !== null),
+      detachedStates: Array.from(this.storage.detachedPluginStates.list(), detached => ({
+        installationId: detached.installationId,
+        pluginId: detached.pluginId,
+        packageVersion: detached.packageVersion,
+        manifestDigest: detached.manifestDigest,
+        detachedAt: detached.detachedAt,
+      })),
+      purgingInstallationIds: Array.from(
+        this.storage.pluginStatePurges.list(),
+        purge => purge.phase === "PENDING" ? purge.installationId : null,
+      ).filter(installationId => installationId !== null),
+    }));
+  }
+
+  /** Resolves one exact non-revoked user lifecycle without exposing its state reference. */
+  readUserPluginUiInstallationForHost(
+      pluginId: string,
+      expectedInstallationId: string): UserPluginUiInstallationSnapshot | null {
+    const installation = this.storage.pluginInstallations.get(pluginId);
+    if (
+      installation === undefined || installation.installationId !== expectedInstallationId ||
+      !installation.enabled ||
+      this.storage.pluginRevocations.get(installation.installationId) !== undefined
+    ) return null;
+    return {
+      installationId: installation.installationId,
+      pluginId: installation.pluginId,
+      packageVersion: installation.packageVersion,
+      manifestDigest: installation.manifestDigest,
+    };
   }
 
   /** Persists or resumes the owner-side marker for one exact detached-state purge. */

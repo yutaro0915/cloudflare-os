@@ -17,6 +17,7 @@ import { Route as ContextRouteImport } from './routes/context'
 import { Route as ExploreRouteImport } from './routes/explore'
 import { Route as GatekeepersRouteImport } from './routes/gatekeepers'
 import { Route as OutputsRouteImport } from './routes/outputs'
+import { Route as PluginsRouteImport } from './routes/plugins'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as ProvidersRouteImport } from './routes/providers'
 import { Route as SignupRouteImport } from './routes/signup'
@@ -66,6 +67,11 @@ const GatekeepersRoute = GatekeepersRouteImport.update({
 const OutputsRoute = OutputsRouteImport.update({
   id: '/outputs',
   path: '/outputs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PluginsRoute = PluginsRouteImport.update({
+  id: '/plugins',
+  path: '/plugins',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProfileRoute = ProfileRouteImport.update({
@@ -128,6 +134,7 @@ export interface FileRoutesByFullPath {
   '/explore': typeof ExploreRoute
   '/gatekeepers': typeof GatekeepersRoute
   '/outputs': typeof OutputsRoute
+  '/plugins': typeof PluginsRoute
   '/profile': typeof ProfileRoute
   '/providers': typeof ProvidersRoute
   '/signup': typeof SignupRoute
@@ -148,6 +155,7 @@ export interface FileRoutesByTo {
   '/explore': typeof ExploreRoute
   '/gatekeepers': typeof GatekeepersRoute
   '/outputs': typeof OutputsRoute
+  '/plugins': typeof PluginsRoute
   '/profile': typeof ProfileRoute
   '/providers': typeof ProvidersRoute
   '/signup': typeof SignupRoute
@@ -169,6 +177,7 @@ export interface FileRoutesById {
   '/explore': typeof ExploreRoute
   '/gatekeepers': typeof GatekeepersRoute
   '/outputs': typeof OutputsRoute
+  '/plugins': typeof PluginsRoute
   '/profile': typeof ProfileRoute
   '/providers': typeof ProvidersRoute
   '/signup': typeof SignupRoute
@@ -191,6 +200,7 @@ export interface FileRouteTypes {
     | '/explore'
     | '/gatekeepers'
     | '/outputs'
+    | '/plugins'
     | '/profile'
     | '/providers'
     | '/signup'
@@ -211,6 +221,7 @@ export interface FileRouteTypes {
     | '/explore'
     | '/gatekeepers'
     | '/outputs'
+    | '/plugins'
     | '/profile'
     | '/providers'
     | '/signup'
@@ -231,6 +242,7 @@ export interface FileRouteTypes {
     | '/explore'
     | '/gatekeepers'
     | '/outputs'
+    | '/plugins'
     | '/profile'
     | '/providers'
     | '/signup'
@@ -252,6 +264,7 @@ export interface RootRouteChildren {
   ExploreRoute: typeof ExploreRoute
   GatekeepersRoute: typeof GatekeepersRoute
   OutputsRoute: typeof OutputsRoute
+  PluginsRoute: typeof PluginsRoute
   ProfileRoute: typeof ProfileRoute
   ProvidersRoute: typeof ProvidersRoute
   SignupRoute: typeof SignupRoute
@@ -320,6 +333,13 @@ declare module '@tanstack/react-router' {
       path: '/outputs'
       fullPath: '/outputs'
       preLoaderRoute: typeof OutputsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/plugins': {
+      id: '/plugins'
+      path: '/plugins'
+      fullPath: '/plugins'
+      preLoaderRoute: typeof PluginsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/profile': {
@@ -404,6 +424,7 @@ const rootRouteChildren: RootRouteChildren = {
   ExploreRoute: ExploreRoute,
   GatekeepersRoute: GatekeepersRoute,
   OutputsRoute: OutputsRoute,
+  PluginsRoute: PluginsRoute,
   ProfileRoute: ProfileRoute,
   ProvidersRoute: ProvidersRoute,
   SignupRoute: SignupRoute,

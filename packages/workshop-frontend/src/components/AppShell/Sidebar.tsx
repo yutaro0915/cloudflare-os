@@ -6,6 +6,7 @@ import {
   Hexagon,
   House,
   MagnifyingGlass,
+  PuzzlePiece,
   Robot,
   SidebarSimple,
   Sparkle,
@@ -197,6 +198,12 @@ export default function Sidebar({
               to="/skills"
               label="Skills"
               icon={<Sparkle size={14} weight="regular" />}
+              collapsed={collapsed}
+            />
+            <SidebarItem
+              to="/plugins"
+              label="Plugins"
+              icon={<PuzzlePiece size={14} weight="regular" />}
               collapsed={collapsed}
             />
             <SidebarItem

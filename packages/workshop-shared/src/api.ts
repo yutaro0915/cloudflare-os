@@ -381,6 +381,206 @@ export type PurgeUserPluginStateResult = {
   error: "DETACHED_PLUGIN_STATE_NOT_FOUND";
 };
 
+/** Plain text block rendered by the trusted host. */
+export interface UserPluginDeclarativeTextBlock {
+  /** Closed renderer discriminator. */
+  kind: "text";
+
+  /** Literal text rendered without HTML interpretation. */
+  text: string;
+}
+
+/** Informational notice block rendered by the trusted host. */
+export interface UserPluginDeclarativeNoticeBlock {
+  /** Closed renderer discriminator. */
+  kind: "notice";
+
+  /** Host-selected visual tone. */
+  tone: "info" | "warning";
+
+  /** Literal notice text rendered without HTML interpretation. */
+  text: string;
+}
+
+/** Literal string list rendered by the trusted host. */
+export interface UserPluginDeclarativeListBlock {
+  /** Closed renderer discriminator. */
+  kind: "list";
+
+  /** Ordered literal items rendered without HTML interpretation. */
+  items: string[];
+}
+
+/** Closed host-rendered document exposed by one verified declarative UI contribution. */
+export interface UserPluginDeclarativeDocument {
+  /** Schema version understood by the trusted frontend renderer. */
+  schemaVersion: 1;
+
+  /** Ordered blocks rendered as text-only host components. */
+  blocks: (
+    UserPluginDeclarativeTextBlock |
+    UserPluginDeclarativeNoticeBlock |
+    UserPluginDeclarativeListBlock
+  )[];
+}
+
+/** Safe browser projection of one digest-bound UI contribution. */
+export type UserPluginUiContribution = {
+  /** Stable contribution identifier within one manifest. */
+  contributionId: string;
+
+  /** Initial fixed host placement. */
+  slot: "user-plugin.details";
+
+  /** Human-readable contribution title. */
+  title: string;
+
+  /** Trusted host renderer family. */
+  kind: "declarative";
+
+  /** Closed display document containing no executable content. */
+  document: UserPluginDeclarativeDocument;
+} | {
+  /** Stable contribution identifier within one manifest. */
+  contributionId: string;
+
+  /** Initial fixed host placement. */
+  slot: "user-plugin.details";
+
+  /** Human-readable contribution title. */
+  title: string;
+
+  /** Resource-limited worker renderer projected into an inert frame. */
+  kind: "worker-rendered";
+
+  /** Host-clamped frame height in CSS pixels. */
+  height: number;
+};
+
+/** One exact version offered by the immutable plugin catalog. */
+export interface UserPluginVersionOffer {
+  /** Exact package version accepted by install. */
+  packageVersion: string;
+
+  /** Human-readable package title from the verified manifest. */
+  title: string;
+
+  /** Short package summary from the verified manifest. */
+  summary: string;
+
+  /** Capabilities the user must approve exactly. */
+  requestedCapabilities: string[];
+
+  /** Plugin identifiers that must already be active. */
+  dependencies: string[];
+
+  /** Safe contribution metadata; sandbox code addresses are omitted. */
+  contributions: UserPluginUiContribution[];
+}
+
+/** Safe current user installation projection for Plugin Center. */
+export interface UserPluginInstallationSummary {
+  /** Host-issued lifecycle identifier used for uninstall CAS. */
+  installationId: string;
+
+  /** Exact installed package version. */
+  packageVersion: string;
+
+  /** Desired enabled state. */
+  enabled: boolean;
+
+  /** Capabilities currently granted by the owner. */
+  grantedCapabilities: string[];
+
+  /** Whether this lifecycle owns optional retained state. */
+  hasState: boolean;
+
+  /** Crash-resumable lifecycle phase derived from the owner SSOT. */
+  lifecycle: "installed" | "uninstalling";
+
+  /** Whether the exact persisted manifest is still in the catalog. */
+  catalogAvailability: "available" | "manifest-missing" | "manifest-mismatch";
+
+  /** Contributions only from the exact digest-matched manifest. */
+  contributions: UserPluginUiContribution[];
+}
+
+/** Plugin Center card joining immutable offers with optional current desired state. */
+export interface UserPluginCenterEntry {
+  /** Stable package identifier. */
+  pluginId: string;
+
+  /** Display title selected deterministically from current or offered manifest metadata. */
+  title: string;
+
+  /** Display summary selected with the same deterministic rule as the title. */
+  summary: string;
+
+  /** Exact catalog offers sorted by package version. */
+  offers: UserPluginVersionOffer[];
+
+  /** Current user lifecycle, or null when this package is not installed. */
+  installation: UserPluginInstallationSummary | null;
+}
+
+/** Detached state row rendered by Plugin Center without its opaque state reference. */
+export interface UserPluginDetachedStateCard extends DetachedUserPluginStateSummary {
+  /** Display title resolved from the exact historical manifest or plugin ID fallback. */
+  title: string;
+
+  /** Crash-resumable purge phase derived from the owner SSOT. */
+  lifecycle: "detached" | "purging";
+}
+
+/** Complete deterministic read model for the authenticated user's Plugin Center. */
+export interface UserPluginCenterView {
+  /** Catalog and current-install cards sorted by plugin ID. */
+  plugins: UserPluginCenterEntry[];
+
+  /** Retained state sorted newest-first without state references. */
+  detachedStates: UserPluginDetachedStateCard[];
+}
+
+/** Exact current worker-rendered contribution requested from Plugin Center. */
+export interface OpenUserPluginUiFrameRequest {
+  /** Stable package identifier of the current user installation. */
+  pluginId: string;
+
+  /** Exact current lifecycle observed in the Plugin Center snapshot. */
+  expectedInstallationId: string;
+
+  /** Manifest-owned sandbox contribution identifier. */
+  contributionId: string;
+}
+
+/** Display-only opaque-origin frame returned after owner and artifact revalidation. */
+export interface UserPluginUiFrame {
+  /** Human-readable frame title from the verified manifest. */
+  title: string;
+
+  /** Host-authored, script-free HTML projected from a twice-validated closed document. */
+  iframeHtml: string;
+
+  /** Host-validated frame height in CSS pixels. */
+  height: number;
+
+}
+
+/** Result of opening one exact installed sandbox contribution. */
+export type OpenUserPluginUiFrameResult = {
+  /** The contribution remains current and its artifact was verified. */
+  ok: true;
+
+  /** Display-only iframe definition containing no RPC authority. */
+  frame: UserPluginUiFrame;
+} | {
+  /** No frame or capability was created. */
+  ok: false;
+
+  /** Collapsed expected failure that does not reveal internal policy or artifact state. */
+  error: "PLUGIN_UI_NOT_AVAILABLE";
+};
+
 /** Workspace-scoped install result returned by `Overseer.installWorkspacePlugin()`. */
 export type InstallWorkspacePluginResult = InstallPluginResult | {
   /** The build collaborator request was rejected without changing desired state. */
@@ -406,6 +606,14 @@ export interface AuthenticatedApi extends RpcTarget {
 
   /** Permanently purges one exact detached state lifecycle. */
   purgeUserPluginState(request: PurgeUserPluginStateRequest): Promise<PurgeUserPluginStateResult>;
+
+  /** Reads the complete safe Plugin Center projection for the authenticated user. */
+  getUserPluginCenter(): Promise<UserPluginCenterView>;
+
+  /** Opens one exact worker-rendered contribution as an inert display frame. */
+  openUserPluginUiFrame(
+    request: OpenUserPluginUiFrameRequest,
+  ): Promise<OpenUserPluginUiFrameResult>;
 
   // Set the user's own display name, seen in chats, etc.
   setOwnDisplayName(name: string): Promise<void>;

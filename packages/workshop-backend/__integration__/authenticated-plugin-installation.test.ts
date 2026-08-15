@@ -332,4 +332,127 @@ describe("authenticated user plugin installation", () => {
       .listUserPluginAuditEvents()).filter(event => event.action === "PLUGIN_STATE_PURGED"))
       .toHaveLength(3);
   });
+
+  it("projects an isolated deterministic Plugin Center without authority fields", async () => {
+    using publicApi = await connect();
+    const firstAccount = await createAccount(publicApi, "plugincenterfirst");
+    const secondAccount = await createAccount(publicApi, "plugincentersecond");
+    using first = await publicApi.authenticate(firstAccount.token);
+    using second = await publicApi.authenticate(secondAccount.token);
+    const installed = await first.installUserPlugin({
+      pluginId: "test.ui-center",
+      packageVersion: "1.0.0",
+      approvedCapabilities: [],
+    });
+    if (!installed.ok) throw new Error("Expected UI plugin installation.");
+
+    const firstView = await first.getUserPluginCenter();
+    const secondView = await second.getUserPluginCenter();
+    const firstCard = firstView.plugins.find(plugin => plugin.pluginId === "test.ui-center");
+    const secondCard = secondView.plugins.find(plugin => plugin.pluginId === "test.ui-center");
+    expect(firstCard).toMatchObject({
+      title: "UI Center Test",
+      offers: [{
+        packageVersion: "1.0.0",
+        contributions: [
+          {kind: "declarative"},
+          {kind: "worker-rendered", height: 180},
+          {kind: "worker-rendered", height: 180},
+          {kind: "worker-rendered", height: 240},
+        ],
+      }],
+      installation: {
+        installationId: installed.installationId,
+        lifecycle: "installed",
+        contributions: [
+          {kind: "declarative"},
+          {kind: "worker-rendered"},
+          {kind: "worker-rendered"},
+          {kind: "worker-rendered"},
+        ],
+      },
+    });
+    expect(secondCard).toMatchObject({installation: null});
+
+    const opened = await first.openUserPluginUiFrame({
+      pluginId: "test.ui-center",
+      expectedInstallationId: installed.installationId,
+      contributionId: "sandbox",
+    });
+    expect(opened).toMatchObject({
+      ok: true,
+      frame: {
+        title: "Worker-rendered surface",
+        height: 240,
+        iframeHtml: expect.stringContaining("connect-src 'none'"),
+      },
+    });
+    if (!opened.ok) throw new Error("Expected isolated UI frame.");
+    expect(opened.frame.iframeHtml).toContain("Rendered in an isolated Dynamic Worker.");
+    expect(opened.frame.iframeHtml).toContain("script-src 'none'");
+    expect(opened.frame.iframeHtml).not.toContain("<script");
+    await expect(first.openUserPluginUiFrame({
+      pluginId: "test.ui-center",
+      expectedInstallationId: installed.installationId,
+      contributionId: "hung-render",
+    })).resolves.toEqual({ok: false, error: "PLUGIN_UI_NOT_AVAILABLE"});
+    await expect(first.openUserPluginUiFrame({
+      pluginId: "test.ui-center",
+      expectedInstallationId: installed.installationId,
+      contributionId: "prototype-poison",
+    })).resolves.toEqual({ok: false, error: "PLUGIN_UI_NOT_AVAILABLE"});
+    await expect(first.getUserPluginCenter()).resolves.toMatchObject({
+      plugins: expect.arrayContaining([expect.objectContaining({pluginId: "test.ui-center"})]),
+    });
+    expect(JSON.stringify(opened)).not.toContain("sha256:");
+
+    const owner = exports.UserDurableObject.getByName(firstAccount.username);
+    const [persisted] = await owner.listUserPluginInstallations();
+    if (persisted === undefined) throw new Error("Expected persisted UI plugin installation.");
+    await owner.putUserPluginInstallation({
+      installationId: persisted.installationId,
+      pluginId: persisted.pluginId,
+      packageVersion: persisted.packageVersion,
+      manifestDigest: persisted.manifestDigest,
+      enabled: false,
+      grantedCapabilities: persisted.grantedCapabilities,
+      config: persisted.config,
+    });
+    await expect(first.openUserPluginUiFrame({
+      pluginId: "test.ui-center",
+      expectedInstallationId: installed.installationId,
+      contributionId: "sandbox",
+    })).resolves.toEqual({ok: false, error: "PLUGIN_UI_NOT_AVAILABLE"});
+    await expect(first.openUserPluginUiFrame({
+      pluginId: "test.ui-center",
+      expectedInstallationId: installed.installationId,
+      contributionId: "details",
+    })).resolves.toEqual({ok: false, error: "PLUGIN_UI_NOT_AVAILABLE"});
+    await expect(second.openUserPluginUiFrame({
+      pluginId: "test.ui-center",
+      expectedInstallationId: installed.installationId,
+      contributionId: "sandbox",
+    })).resolves.toEqual({ok: false, error: "PLUGIN_UI_NOT_AVAILABLE"});
+
+    const serialized = JSON.stringify(firstView);
+    for (const forbidden of [
+      "stateRef", "manifestDigest", "codeArtifactDigest", "targetId", "scope", "config",
+      "sha256:",
+    ]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+
+    await owner.beginUserPluginUninstall("test.ui-center", installed.installationId);
+    await expect(first.openUserPluginUiFrame({
+      pluginId: "test.ui-center",
+      expectedInstallationId: installed.installationId,
+      contributionId: "sandbox",
+    })).resolves.toEqual({ok: false, error: "PLUGIN_UI_NOT_AVAILABLE"});
+    await expect(first.getUserPluginCenter()).resolves.toMatchObject({
+      plugins: expect.arrayContaining([expect.objectContaining({
+        pluginId: "test.ui-center",
+        installation: expect.objectContaining({lifecycle: "uninstalling"}),
+      })]),
+    });
+  });
 });

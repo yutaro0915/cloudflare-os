@@ -9,6 +9,8 @@ interface PluginManifestBase {
   readonly requestedCapabilities: readonly string[];
 }
 
+const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
+
 /** Original declarative plugin manifest without package dependencies. */
 export interface PluginManifestV1 extends PluginManifestBase {
   /** Schema version for the manifest document. */
@@ -33,6 +35,48 @@ export interface PluginRuntimeDescriptor {
   readonly codeArtifactDigest: string;
 }
 
+/** Safe presentation metadata rendered by the trusted Plugin Center. */
+export interface PluginPresentation {
+  /** Human-readable package title. */
+  readonly title: string;
+
+  /** Short package summary. */
+  readonly summary: string;
+}
+
+/** Closed declarative document rendered only by trusted host components. */
+export interface DeclarativePluginUiDocument {
+  /** Schema version of the bounded host-rendered document. */
+  readonly schemaVersion: 1;
+
+  /** Ordered display blocks; raw HTML, CSS, URLs, and handlers are not representable. */
+  readonly blocks: readonly (
+    | {readonly kind: "text"; readonly text: string}
+    | {readonly kind: "notice"; readonly tone: "info" | "warning"; readonly text: string}
+    | {readonly kind: "list"; readonly items: readonly string[]}
+  )[];
+}
+
+/** One digest-bound contribution to the initial user plugin details surface. */
+export type PluginUiContributionDescriptor = {
+  readonly contributionId: string;
+  readonly slot: "user-plugin.details";
+  readonly title: string;
+  readonly renderer: {
+    readonly kind: "host-schema-v1";
+    readonly document: DeclarativePluginUiDocument;
+  };
+} | {
+  readonly contributionId: string;
+  readonly slot: "user-plugin.details";
+  readonly title: string;
+  readonly renderer: {
+    readonly kind: "worker-rendered-document-v1";
+    readonly codeArtifactDigest: string;
+    readonly height: number;
+  };
+};
+
 /** Declarative plugin manifest that can produce an isolated runtime candidate. */
 export interface PluginManifestV3 extends PluginManifestBase {
   /** Schema version for the manifest document. */
@@ -45,19 +89,44 @@ export interface PluginManifestV3 extends PluginManifestBase {
   readonly runtime: PluginRuntimeDescriptor;
 }
 
+/** Runtime plugin manifest with digest-bound Plugin Center UI contributions. */
+export interface PluginManifestV4 extends PluginManifestBase {
+  /** Schema version for UI-capable packages. */
+  readonly schemaVersion: 4;
+
+  /** Packages that must already be active before this package can activate. */
+  readonly dependencies: readonly string[];
+
+  /** Immutable runtime artifact selected by this exact package version. */
+  readonly runtime: PluginRuntimeDescriptor;
+
+  /** Safe package presentation metadata. */
+  readonly presentation: PluginPresentation;
+
+  /** Ordered UI contributions; verification canonicalizes by contribution ID. */
+  readonly uiContributions: readonly PluginUiContributionDescriptor[];
+}
+
 /** Declarative plugin manifest before its immutable bytes and digest are verified. */
-export type PluginManifest = PluginManifestV1 | PluginManifestV2 | PluginManifestV3;
+export type PluginManifest =
+  PluginManifestV1 | PluginManifestV2 | PluginManifestV3 | PluginManifestV4;
 
 /** An owned immutable plugin manifest with a digest verified by its registry adapter. */
 export interface VerifiedPluginManifest extends PluginManifestBase {
   /** Schema version of the canonical source document. */
-  readonly schemaVersion: 1 | 2 | 3;
+  readonly schemaVersion: 1 | 2 | 3 | 4;
 
   /** Canonical dependency set; schema v1 manifests resolve to an empty set. */
   readonly dependencies: readonly string[];
 
   /** Verified runtime descriptor; absent for metadata-only schema v1 and v2 manifests. */
   readonly runtime?: PluginRuntimeDescriptor;
+
+  /** Verified presentation metadata for schema v4 packages. */
+  readonly presentation?: PluginPresentation;
+
+  /** Verified owned UI contributions for schema v4 packages. */
+  readonly uiContributions?: readonly PluginUiContributionDescriptor[];
 
   /** SHA-256 digest of the canonical manifest bytes. */
   readonly manifestDigest: string;
@@ -69,8 +138,14 @@ export interface PluginManifestResolver {
   resolve(pluginId: string, packageVersion: string): Promise<VerifiedPluginManifest | null>;
 }
 
+/** Exact resolver plus deterministic enumeration for trusted catalog projections. */
+export interface PluginManifestCatalog extends PluginManifestResolver {
+  /** Returns immutable verified entries in registry order. */
+  list(): Promise<readonly VerifiedPluginManifest[]>;
+}
+
 /** Manifest resolver backed by the immutable entries bundled into one deployment. */
-export class BundledPluginManifestResolver implements PluginManifestResolver {
+export class BundledPluginManifestResolver implements PluginManifestCatalog {
   readonly #entries: readonly VerifiedPluginManifest[];
 
   private constructor(entries: readonly VerifiedPluginManifest[]) {
@@ -101,6 +176,10 @@ export class BundledPluginManifestResolver implements PluginManifestResolver {
       entry => entry.pluginId === pluginId && entry.packageVersion === packageVersion,
     ) ?? null;
   }
+
+  async list(): Promise<readonly VerifiedPluginManifest[]> {
+    return this.#entries;
+  }
 }
 
 async function verifyPluginManifest(manifest: PluginManifest): Promise<VerifiedPluginManifest> {
@@ -114,7 +193,7 @@ async function verifyPluginManifest(manifest: PluginManifest): Promise<VerifiedP
     );
   }
   if (
-    manifest.schemaVersion === 3 &&
+    (manifest.schemaVersion === 3 || manifest.schemaVersion === 4) &&
     (manifest.runtime.kind !== "dynamic-worker" ||
       !/^sha256:[0-9a-f]{64}$/.test(manifest.runtime.codeArtifactDigest) ||
       Object.keys(manifest.runtime).some(
@@ -124,6 +203,16 @@ async function verifyPluginManifest(manifest: PluginManifest): Promise<VerifiedP
     throw new TypeError(
       `Invalid runtime descriptor in ${manifest.pluginId}@${manifest.packageVersion}`,
     );
+  }
+  if (manifest.schemaVersion === 4) {
+    if (!isValidPresentation(manifest.presentation)) {
+      throw new TypeError(`Invalid presentation in ${manifest.pluginId}@${manifest.packageVersion}`);
+    }
+    if (!isValidUiContributions(manifest.uiContributions)) {
+      throw new TypeError(
+        `Invalid UI contributions in ${manifest.pluginId}@${manifest.packageVersion}`,
+      );
+    }
   }
   const snapshot: PluginManifest = manifest.schemaVersion === 1
     ? Object.freeze({
@@ -138,7 +227,7 @@ async function verifyPluginManifest(manifest: PluginManifest): Promise<VerifiedP
       packageVersion: manifest.packageVersion,
       requestedCapabilities: Object.freeze([...manifest.requestedCapabilities]),
       dependencies: Object.freeze([...manifest.dependencies].toSorted()),
-    }) : Object.freeze({
+    }) : manifest.schemaVersion === 3 ? Object.freeze({
       schemaVersion: 3,
       pluginId: manifest.pluginId,
       packageVersion: manifest.packageVersion,
@@ -148,13 +237,188 @@ async function verifyPluginManifest(manifest: PluginManifest): Promise<VerifiedP
         kind: "dynamic-worker",
         codeArtifactDigest: manifest.runtime.codeArtifactDigest,
       }),
+    }) : Object.freeze({
+      schemaVersion: 4,
+      pluginId: manifest.pluginId,
+      packageVersion: manifest.packageVersion,
+      requestedCapabilities: Object.freeze([...manifest.requestedCapabilities]),
+      dependencies: Object.freeze([...manifest.dependencies].toSorted()),
+      runtime: Object.freeze({
+        kind: "dynamic-worker",
+        codeArtifactDigest: manifest.runtime.codeArtifactDigest,
+      }),
+      presentation: Object.freeze({
+        title: manifest.presentation.title,
+        summary: manifest.presentation.summary,
+      }),
+      uiContributions: snapshotUiContributions(manifest.uiContributions),
     });
   const canonical = JSON.stringify(snapshot);
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  const canonicalBytes = new TextEncoder().encode(canonical);
+  if (canonicalBytes.byteLength > MAX_PLUGIN_MANIFEST_BYTES) {
+    throw new RangeError(
+      `Plugin manifest exceeds size limit: ${manifest.pluginId}@${manifest.packageVersion}`,
+    );
+  }
+  const digest = await crypto.subtle.digest("SHA-256", canonicalBytes);
   return Object.freeze({
     ...snapshot,
     dependencies: Object.freeze(snapshot.schemaVersion === 1 ? [] : [...snapshot.dependencies]),
-    ...(snapshot.schemaVersion === 3 ? {runtime: snapshot.runtime} : {}),
+    ...(snapshot.schemaVersion === 3 || snapshot.schemaVersion === 4
+      ? {runtime: snapshot.runtime}
+      : {}),
+    ...(snapshot.schemaVersion === 4 ? {
+      presentation: snapshot.presentation,
+      uiContributions: snapshot.uiContributions,
+    } : {}),
     manifestDigest: `sha256:${new Uint8Array(digest).toHex()}`,
   });
+}
+
+const UI_CONTRIBUTION_ID = /^[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?$/;
+
+function hasOnlyKeys(value: object, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every(key => keys.includes(key));
+}
+
+function isDenseArray(value: unknown): value is unknown[] {
+  if (!Array.isArray(value) || Object.keys(value).length !== value.length) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) return false;
+  }
+  return true;
+}
+
+function isBoundedText(value: unknown, maxLength: number): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= maxLength;
+}
+
+function isValidPresentation(value: unknown): value is PluginPresentation {
+  return typeof value === "object" && value !== null && !Array.isArray(value) &&
+    hasOnlyKeys(value, ["title", "summary"]) &&
+    isBoundedText(Reflect.get(value, "title"), 80) &&
+    isBoundedText(Reflect.get(value, "summary"), 240);
+}
+
+function isValidDeclarativeDocument(value: unknown): value is DeclarativePluginUiDocument {
+  if (
+    typeof value !== "object" || value === null || Array.isArray(value) ||
+    !hasOnlyKeys(value, ["schemaVersion", "blocks"]) ||
+    Reflect.get(value, "schemaVersion") !== 1
+  ) return false;
+  const blocks = Reflect.get(value, "blocks");
+  if (!isDenseArray(blocks) || blocks.length > 64) return false;
+  return blocks.every(block => {
+    if (typeof block !== "object" || block === null || Array.isArray(block)) return false;
+    const kind = Reflect.get(block, "kind");
+    if (kind === "text") {
+      return hasOnlyKeys(block, ["kind", "text"]) &&
+        isBoundedText(Reflect.get(block, "text"), 2_000);
+    }
+    if (kind === "notice") {
+      const tone = Reflect.get(block, "tone");
+      return hasOnlyKeys(block, ["kind", "tone", "text"]) &&
+        (tone === "info" || tone === "warning") &&
+        isBoundedText(Reflect.get(block, "text"), 2_000);
+    }
+    if (kind === "list") {
+      const items = Reflect.get(block, "items");
+      return hasOnlyKeys(block, ["kind", "items"]) && isDenseArray(items) &&
+        items.length <= 32 && items.every(item => isBoundedText(item, 256));
+    }
+    return false;
+  });
+}
+
+function isValidUiContributions(
+    value: unknown): value is readonly PluginUiContributionDescriptor[] {
+  if (!isDenseArray(value) || value.length > 16) return false;
+  const ids = new Set<string>();
+  for (const contribution of value) {
+    if (
+      typeof contribution !== "object" || contribution === null || Array.isArray(contribution) ||
+      !hasOnlyKeys(contribution, ["contributionId", "slot", "title", "renderer"])
+    ) return false;
+    const id = Reflect.get(contribution, "contributionId");
+    if (
+      typeof id !== "string" || !UI_CONTRIBUTION_ID.test(id) || ids.has(id) ||
+      Reflect.get(contribution, "slot") !== "user-plugin.details" ||
+      !isBoundedText(Reflect.get(contribution, "title"), 80)
+    ) return false;
+    ids.add(id);
+    const renderer = Reflect.get(contribution, "renderer");
+    if (typeof renderer !== "object" || renderer === null || Array.isArray(renderer)) return false;
+    if (Reflect.get(renderer, "kind") === "host-schema-v1") {
+      if (
+        !hasOnlyKeys(renderer, ["kind", "document"]) ||
+        !isValidDeclarativeDocument(Reflect.get(renderer, "document"))
+      ) return false;
+    } else if (Reflect.get(renderer, "kind") === "worker-rendered-document-v1") {
+      const height = Reflect.get(renderer, "height");
+      if (
+        !hasOnlyKeys(renderer, ["kind", "codeArtifactDigest", "height"]) ||
+        !/^sha256:[0-9a-f]{64}$/.test(Reflect.get(renderer, "codeArtifactDigest")) ||
+        !Number.isInteger(height) || height < 120 || height > 800
+      ) return false;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+function snapshotDeclarativeDocument(
+    document: DeclarativePluginUiDocument): DeclarativePluginUiDocument {
+  return Object.freeze({
+    schemaVersion: 1,
+    blocks: Object.freeze(document.blocks.map(block => block.kind === "list"
+      ? Object.freeze({kind: "list" as const, items: Object.freeze([...block.items])})
+      : block.kind === "notice"
+        ? Object.freeze({kind: "notice" as const, tone: block.tone, text: block.text})
+        : Object.freeze({kind: "text" as const, text: block.text}))),
+  });
+}
+
+/** Validates untrusted renderer output and returns an owned immutable closed document. */
+export function snapshotPluginUiDocument(
+    value: unknown): DeclarativePluginUiDocument | null {
+  if (!isValidDeclarativeDocument(value)) return null;
+  const snapshot = snapshotDeclarativeDocument(value);
+  if (new TextEncoder().encode(JSON.stringify(snapshot)).byteLength > MAX_PLUGIN_MANIFEST_BYTES) {
+    return null;
+  }
+  return snapshot;
+}
+
+function snapshotUiContributions(
+    contributions: readonly PluginUiContributionDescriptor[],
+): readonly PluginUiContributionDescriptor[] {
+  return Object.freeze(contributions.map(
+    (contribution): PluginUiContributionDescriptor => {
+      if (contribution.renderer.kind === "host-schema-v1") {
+        return Object.freeze({
+          contributionId: contribution.contributionId,
+          slot: "user-plugin.details",
+          title: contribution.title,
+          renderer: Object.freeze({
+        kind: "host-schema-v1" as const,
+        document: snapshotDeclarativeDocument(contribution.renderer.document),
+          }),
+        });
+      }
+      return Object.freeze({
+        contributionId: contribution.contributionId,
+        slot: "user-plugin.details",
+        title: contribution.title,
+        renderer: Object.freeze({
+          kind: "worker-rendered-document-v1" as const,
+          codeArtifactDigest: contribution.renderer.codeArtifactDigest,
+          height: contribution.renderer.height,
+        }),
+      });
+    },
+  ).toSorted((left, right) => left.contributionId < right.contributionId
+    ? -1
+    : left.contributionId > right.contributionId ? 1 : 0));
 }

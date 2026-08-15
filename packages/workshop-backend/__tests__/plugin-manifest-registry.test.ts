@@ -177,6 +177,184 @@ describe("bundled plugin manifest resolver", () => {
       .rejects.toThrow("Invalid runtime descriptor in example.runtime@1.0.0");
   });
 
+  it("binds owned schema v4 UI contributions into a deterministic manifest digest", async () => {
+    const source: PluginManifest = {
+      schemaVersion: 4,
+      pluginId: "example.ui",
+      packageVersion: "1.0.0",
+      requestedCapabilities: [],
+      dependencies: [],
+      runtime: {
+        kind: "dynamic-worker",
+        codeArtifactDigest: `sha256:${"a".repeat(64)}`,
+      },
+      presentation: {
+        title: "Example UI",
+        summary: "Safe host and sandbox views.",
+      },
+      uiContributions: [{
+        contributionId: "details",
+        slot: "user-plugin.details",
+        title: "Details",
+        renderer: {
+          kind: "host-schema-v1",
+          document: {schemaVersion: 1, blocks: [{kind: "text", text: "Hello"}]},
+        },
+      }, {
+        contributionId: "sandbox",
+        slot: "user-plugin.details",
+        title: "Sandbox",
+        renderer: {
+          kind: "worker-rendered-document-v1",
+          codeArtifactDigest: `sha256:${"b".repeat(64)}`,
+          height: 240,
+        },
+      }],
+    };
+    const resolver = await BundledPluginManifestResolver.create([source]);
+    const resolved = await resolver.resolve("example.ui", "1.0.0");
+
+    expect(resolved).toMatchObject({
+      schemaVersion: 4,
+      presentation: source.presentation,
+      uiContributions: source.uiContributions,
+      manifestDigest:
+        "sha256:53d915e61f21371238168e8b2402865c8d9c187bb7b40b0517c8a7f50243bf0f",
+    });
+    expect(Object.isFrozen(resolved!.presentation)).toBe(true);
+    expect(Object.isFrozen(resolved!.uiContributions)).toBe(true);
+    expect(Object.isFrozen(resolved!.uiContributions![0].renderer)).toBe(true);
+
+    const reordered = await BundledPluginManifestResolver.create([{
+      ...source,
+      uiContributions: source.uiContributions.toReversed(),
+    }]);
+    await expect(reordered.resolve("example.ui", "1.0.0")).resolves.toMatchObject({
+      manifestDigest: resolved!.manifestDigest,
+    });
+
+    const changed = await BundledPluginManifestResolver.create([{
+      ...source,
+      uiContributions: [{
+        ...source.uiContributions[0],
+        renderer: {
+          kind: "host-schema-v1" as const,
+          document: {schemaVersion: 1 as const, blocks: [{kind: "text" as const, text: "Changed"}]},
+        },
+      }, source.uiContributions[1]],
+    }]);
+    const changedManifest = await changed.resolve("example.ui", "1.0.0");
+    expect(changedManifest!.manifestDigest).not.toBe(resolved!.manifestDigest);
+  });
+
+  it("rejects malformed schema v4 presentation and UI contribution declarations", async () => {
+    const base: PluginManifest = {
+      schemaVersion: 4,
+      pluginId: "example.ui",
+      packageVersion: "1.0.0",
+      requestedCapabilities: [],
+      dependencies: [],
+      runtime: {
+        kind: "dynamic-worker",
+        codeArtifactDigest: `sha256:${"a".repeat(64)}`,
+      },
+      presentation: {title: "Example", summary: "Summary"},
+      uiContributions: [],
+    };
+    const duplicate = {
+      contributionId: "details",
+      slot: "user-plugin.details" as const,
+      title: "Details",
+      renderer: {
+        kind: "host-schema-v1" as const,
+        document: {schemaVersion: 1 as const, blocks: []},
+      },
+    };
+
+    await expect(BundledPluginManifestResolver.create([{
+      ...base,
+      uiContributions: [duplicate, duplicate],
+    }])).rejects.toThrow("Invalid UI contributions in example.ui@1.0.0");
+    await expect(BundledPluginManifestResolver.create([{
+      ...base,
+      presentation: {title: "", summary: "Summary"},
+    }])).rejects.toThrow("Invalid presentation in example.ui@1.0.0");
+    await expect(BundledPluginManifestResolver.create([{
+      ...base,
+      uiContributions: [{
+        ...duplicate,
+        renderer: {
+          kind: "worker-rendered-document-v1" as const,
+          codeArtifactDigest: "not-a-digest",
+          height: 240,
+        },
+      }],
+    }])).rejects.toThrow("Invalid UI contributions in example.ui@1.0.0");
+    await expect(BundledPluginManifestResolver.create([{
+      ...base,
+      uiContributions: [{
+        ...duplicate,
+        renderer: {
+          kind: "host-schema-v1" as const,
+          document: {
+            schemaVersion: 1 as const,
+            blocks: Array.from({length: 64}, () => ({
+              kind: "text" as const,
+              text: "雪".repeat(2_000),
+            })),
+          },
+        },
+      }],
+    }])).rejects.toThrow("Plugin manifest exceeds size limit: example.ui@1.0.0");
+  });
+
+  it("owns nested schema v4 declarative documents before asynchronous hashing", async () => {
+    const items = ["first", "second"];
+    const blocks = [{kind: "list" as const, items}];
+    const source: PluginManifest = {
+      schemaVersion: 4,
+      pluginId: "example.snapshot-ui",
+      packageVersion: "1.0.0",
+      requestedCapabilities: [],
+      dependencies: [],
+      runtime: {
+        kind: "dynamic-worker",
+        codeArtifactDigest: `sha256:${"a".repeat(64)}`,
+      },
+      presentation: {title: "Snapshot UI", summary: "Owned nested document."},
+      uiContributions: [{
+        contributionId: "details",
+        slot: "user-plugin.details",
+        title: "Details",
+        renderer: {
+          kind: "host-schema-v1",
+          document: {schemaVersion: 1, blocks},
+        },
+      }],
+    };
+
+    const pending = BundledPluginManifestResolver.create([source]);
+    items[0] = "forged item";
+    blocks[0] = {kind: "list", items: ["forged block"]};
+    const resolver = await pending;
+    const resolved = await resolver.resolve("example.snapshot-ui", "1.0.0");
+    const contribution = resolved!.uiContributions![0];
+    if (contribution.renderer.kind !== "host-schema-v1") {
+      throw new Error("Expected declarative contribution.");
+    }
+    expect(contribution.renderer.document.blocks).toEqual([{
+      kind: "list",
+      items: ["first", "second"],
+    }]);
+    expect(Object.isFrozen(contribution.renderer.document)).toBe(true);
+    expect(Object.isFrozen(contribution.renderer.document.blocks)).toBe(true);
+    expect(Object.isFrozen(contribution.renderer.document.blocks[0])).toBe(true);
+    const block = contribution.renderer.document.blocks[0];
+    if (block.kind !== "list") throw new Error("Expected list block.");
+    expect(Object.isFrozen(block.items)).toBe(true);
+    expect(Reflect.set(block.items, 0, "forged result")).toBe(false);
+  });
+
   it("creates a verified snapshot that source and callers cannot mutate", async () => {
     const requestedCapabilities = ["ui.panel"];
     const source: PluginManifest = {

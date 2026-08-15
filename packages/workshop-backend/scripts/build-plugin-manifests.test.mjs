@@ -173,13 +173,13 @@ test("rejects dependency declarations that do not match their schema", async (t)
   const invalid = [
     {
       manifest: {
-        schemaVersion: 4,
+        schemaVersion: 5,
         pluginId: "example.notes",
         packageVersion: "1.0.0",
         requestedCapabilities: [],
         dependencies: [],
       },
-      error: /schemaVersion must be 1, 2, or 3/,
+      error: /schemaVersion must be 1, 2, 3, or 4/,
     },
     {
       manifest: {
@@ -240,6 +240,125 @@ test("builds schema v3 with a fixed Dynamic Worker artifact descriptor", async (
   )?.[1];
   assert.ok(artifactLiteral, "generated module should contain the artifact map");
   assert.deepEqual(JSON.parse(artifactLiteral), {[codeArtifactDigest]: code});
+});
+
+test("builds schema v4 presentation and host/worker-rendered UI contributions", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "plugin-manifests-ui-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const sourceDir = join(root, "input");
+  const outFile = join(root, "generated", "plugin-manifests.ts");
+  await mkdir(sourceDir);
+  const runtimeCode = `export default { handshake() {} };\n`;
+  const uiCode = `export default { render() { return { schemaVersion: 1, blocks: [] }; } };\n`;
+  const runtimeDigest = `sha256:${createHash("sha256").update(runtimeCode).digest("hex")}`;
+  const uiDigest = `sha256:${createHash("sha256").update(uiCode).digest("hex")}`;
+  await writeFile(join(sourceDir, "runtime.js"), runtimeCode);
+  await writeFile(join(sourceDir, "ui.js"), uiCode);
+  await writeFile(join(sourceDir, "plugin.json"), JSON.stringify({
+    schemaVersion: 4,
+    pluginId: "example.ui",
+    packageVersion: "1.0.0",
+    requestedCapabilities: [],
+    dependencies: [],
+    runtime: {kind: "dynamic-worker", codeArtifactDigest: runtimeDigest},
+    presentation: {title: "Example UI", summary: "Safe UI contributions."},
+    uiContributions: [{
+      contributionId: "details",
+      slot: "user-plugin.details",
+      title: "Details",
+      renderer: {
+        kind: "host-schema-v1",
+        document: {schemaVersion: 1, blocks: [{kind: "text", text: "Hello"}]},
+      },
+    }, {
+      contributionId: "sandbox",
+      slot: "user-plugin.details",
+      title: "Sandbox",
+      renderer: {kind: "worker-rendered-document-v1", codeArtifactDigest: uiDigest, height: 240},
+    }],
+  }));
+
+  await runBuild(sourceDir, outFile);
+
+  const generated = await readFile(outFile, "utf8");
+  assert.match(generated, /"schemaVersion": 4/);
+  assert.match(generated, /"kind": "host-schema-v1"/);
+  assert.match(generated, /"kind": "worker-rendered-document-v1"/);
+  assert.match(generated, new RegExp(uiDigest));
+});
+
+test("rejects malformed or missing schema v4 UI contributions", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "plugin-manifests-ui-invalid-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const sourceDir = join(root, "input");
+  const outFile = join(root, "generated", "plugin-manifests.ts");
+  await mkdir(sourceDir);
+  const runtimeCode = `export default { handshake() {} };\n`;
+  const runtimeDigest = `sha256:${createHash("sha256").update(runtimeCode).digest("hex")}`;
+  await writeFile(join(sourceDir, "runtime.js"), runtimeCode);
+  const base = {
+    schemaVersion: 4,
+    pluginId: "example.ui",
+    packageVersion: "1.0.0",
+    requestedCapabilities: [],
+    dependencies: [],
+    runtime: {kind: "dynamic-worker", codeArtifactDigest: runtimeDigest},
+    presentation: {title: "Example", summary: "Summary"},
+  };
+  const contribution = {
+    contributionId: "sandbox",
+    slot: "user-plugin.details",
+    title: "Sandbox",
+    renderer: {
+      kind: "worker-rendered-document-v1",
+      codeArtifactDigest: `sha256:${"f".repeat(64)}`,
+      height: 240,
+    },
+  };
+
+  await writeFile(join(sourceDir, "plugin.json"), JSON.stringify({
+    ...base,
+    runtime: {kind: "dynamic-worker", codeArtifactDigest: `sha256:${"e".repeat(64)}`},
+    uiContributions: [{
+      contributionId: "details",
+      slot: "user-plugin.details",
+      title: "Details",
+      renderer: {
+        kind: "host-schema-v1",
+        document: {schemaVersion: 1, blocks: [{kind: "text", text: "Safe"}]},
+      },
+    }],
+  }));
+  await assert.rejects(runBuild(sourceDir, outFile), /code artifact not found/);
+
+  await writeFile(join(sourceDir, "plugin.json"), JSON.stringify({
+    ...base,
+    uiContributions: [contribution, contribution],
+  }));
+  await assert.rejects(runBuild(sourceDir, outFile), /uiContributions must/);
+
+  await writeFile(join(sourceDir, "plugin.json"), JSON.stringify({
+    ...base,
+    uiContributions: [contribution],
+  }));
+  await assert.rejects(runBuild(sourceDir, outFile), /UI code artifact not found/);
+
+  await writeFile(join(sourceDir, "plugin.json"), JSON.stringify({
+    ...base,
+    uiContributions: [{
+      contributionId: "details",
+      slot: "user-plugin.details",
+      title: "Details",
+      renderer: {
+        kind: "host-schema-v1",
+        document: {
+          schemaVersion: 1,
+          blocks: Array.from({length: 64}, () => ({kind: "text", text: "雪".repeat(2_000)})),
+        },
+      },
+    }],
+  }));
+  await assert.rejects(runBuild(sourceDir, outFile), /plugin manifest exceeds the size limit/);
 });
 
 test("rejects missing or changed code referenced by a schema v3 manifest", async (t) => {

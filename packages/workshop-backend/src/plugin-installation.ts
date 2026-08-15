@@ -665,6 +665,36 @@ export type FinalizeUserPluginStatePurgeResult = {
   error: "DETACHED_PLUGIN_STATE_NOT_FOUND";
 };
 
+/** Atomic host-only owner snapshot used to build one safe Plugin Center view. */
+export interface UserPluginCenterOwnerSnapshot {
+  installations: {
+    installationId: string;
+    pluginId: string;
+    packageVersion: string;
+    manifestDigest: string;
+    enabled: boolean;
+    grantedCapabilities: string[];
+    hasState: boolean;
+  }[];
+  uninstallingInstallationIds: string[];
+  detachedStates: {
+    installationId: string;
+    pluginId: string;
+    packageVersion: string;
+    manifestDigest: string;
+    detachedAt: number;
+  }[];
+  purgingInstallationIds: string[];
+}
+
+/** Compact current owner claim used to authorize one Plugin Center UI open. */
+export interface UserPluginUiInstallationSnapshot {
+  installationId: string;
+  pluginId: string;
+  packageVersion: string;
+  manifestDigest: string;
+}
+
 /** Returns whether a manifest digest is in canonical content-addressed form. */
 export function isCanonicalPluginManifestDigest(digest: string): boolean {
   return /^sha256:[0-9a-f]{64}$/.test(digest);
