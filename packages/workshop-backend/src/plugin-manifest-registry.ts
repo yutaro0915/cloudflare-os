@@ -1,5 +1,5 @@
-/** A plugin manifest whose immutable bytes and digest were verified by its registry adapter. */
-export interface VerifiedPluginManifest {
+/** Declarative plugin manifest before its immutable bytes and digest are verified. */
+export interface PluginManifest {
   /** Schema version for the manifest document. */
   readonly schemaVersion: 1;
 
@@ -9,11 +9,14 @@ export interface VerifiedPluginManifest {
   /** Exact package version represented by this manifest. */
   readonly packageVersion: string;
 
-  /** SHA-256 digest of the canonical manifest bytes. */
-  readonly manifestDigest: string;
-
   /** Capabilities the package asks an installer to approve individually. */
   readonly requestedCapabilities: readonly string[];
+}
+
+/** An owned immutable plugin manifest with a digest verified by its registry adapter. */
+export interface VerifiedPluginManifest extends PluginManifest {
+  /** SHA-256 digest of the canonical manifest bytes. */
+  readonly manifestDigest: string;
 }
 
 /** Resolves one exact immutable plugin manifest without exposing its storage implementation. */
@@ -26,8 +29,14 @@ export interface PluginManifestResolver {
 export class BundledPluginManifestResolver implements PluginManifestResolver {
   readonly #entries: readonly VerifiedPluginManifest[];
 
-  constructor(entries: readonly VerifiedPluginManifest[]) {
+  private constructor(entries: readonly VerifiedPluginManifest[]) {
     this.#entries = entries;
+  }
+
+  /** Verifies raw bundled manifests and owns immutable snapshots of the results. */
+  static async create(entries: readonly PluginManifest[]): Promise<BundledPluginManifestResolver> {
+    const verified = await Promise.all(entries.map(verifyPluginManifest));
+    return new BundledPluginManifestResolver(Object.freeze(verified));
   }
 
   async resolve(
@@ -36,4 +45,19 @@ export class BundledPluginManifestResolver implements PluginManifestResolver {
       entry => entry.pluginId === pluginId && entry.packageVersion === packageVersion,
     ) ?? null;
   }
+}
+
+async function verifyPluginManifest(manifest: PluginManifest): Promise<VerifiedPluginManifest> {
+  const snapshot: PluginManifest = Object.freeze({
+    schemaVersion: manifest.schemaVersion,
+    pluginId: manifest.pluginId,
+    packageVersion: manifest.packageVersion,
+    requestedCapabilities: Object.freeze([...manifest.requestedCapabilities]),
+  });
+  const canonical = JSON.stringify(snapshot);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  return Object.freeze({
+    ...snapshot,
+    manifestDigest: `sha256:${new Uint8Array(digest).toHex()}`,
+  });
 }
