@@ -34,14 +34,15 @@ function parseManifest(file, parsed) {
     packageVersion,
     requestedCapabilities,
     dependencies,
+    runtime,
     ...unknown
   } = parsed;
   const unknownKeys = Object.keys(unknown);
   if (unknownKeys.length > 0) {
     throw new TypeError(`${file}: unknown keys: ${unknownKeys.join(", ")}`);
   }
-  if (schemaVersion !== 1 && schemaVersion !== 2) {
-    throw new TypeError(`${file}: schemaVersion must be 1 or 2`);
+  if (schemaVersion !== 1 && schemaVersion !== 2 && schemaVersion !== 3) {
+    throw new TypeError(`${file}: schemaVersion must be 1, 2, or 3`);
   }
   for (const [name, value] of [["pluginId", pluginId], ["packageVersion", packageVersion]]) {
     if (typeof value !== "string" || value.trim().length === 0) {
@@ -62,7 +63,7 @@ function parseManifest(file, parsed) {
     throw new TypeError(`${file}: requestedCapabilities must not contain duplicates`);
   }
   if (schemaVersion === 1) {
-    if (dependencies !== undefined) {
+    if (dependencies !== undefined || runtime !== undefined) {
       throw new TypeError(`${file}: dependencies require schemaVersion 2`);
     }
     return {schemaVersion, pluginId, packageVersion, requestedCapabilities};
@@ -78,12 +79,35 @@ function parseManifest(file, parsed) {
   if (new Set(dependencies).size !== dependencies.length) {
     throw new TypeError(`${file}: dependencies must not contain duplicates`);
   }
+  if (schemaVersion === 2) {
+    if (runtime !== undefined) {
+      throw new TypeError(`${file}: runtime requires schemaVersion 3`);
+    }
+    return {
+      schemaVersion,
+      pluginId,
+      packageVersion,
+      requestedCapabilities,
+      dependencies: dependencies.toSorted(),
+    };
+  }
+  if (
+    typeof runtime !== "object" || runtime === null || Array.isArray(runtime) ||
+    runtime.kind !== "dynamic-worker" ||
+    !/^sha256:[0-9a-f]{64}$/.test(runtime.codeArtifactDigest) ||
+    Object.keys(runtime).some(key => key !== "kind" && key !== "codeArtifactDigest")
+  ) {
+    throw new TypeError(
+      `${file}: runtime must be a dynamic-worker descriptor with a canonical SHA-256 digest`,
+    );
+  }
   return {
     schemaVersion,
     pluginId,
     packageVersion,
     requestedCapabilities,
     dependencies: dependencies.toSorted(),
+    runtime: {kind: runtime.kind, codeArtifactDigest: runtime.codeArtifactDigest},
   };
 }
 

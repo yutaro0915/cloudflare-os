@@ -172,13 +172,13 @@ test("rejects dependency declarations that do not match their schema", async (t)
   const invalid = [
     {
       manifest: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         pluginId: "example.notes",
         packageVersion: "1.0.0",
         requestedCapabilities: [],
         dependencies: [],
       },
-      error: /schemaVersion must be 1 or 2/,
+      error: /schemaVersion must be 1, 2, or 3/,
     },
     {
       manifest: {
@@ -204,6 +204,58 @@ test("rejects dependency declarations that do not match their schema", async (t)
   for (const {manifest, error} of invalid) {
     await writeFile(join(sourceDir, "notes.json"), JSON.stringify(manifest));
     await assert.rejects(runBuild(sourceDir, outFile), error);
+  }
+});
+
+test("builds schema v3 with a fixed Dynamic Worker artifact descriptor", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "plugin-manifests-runtime-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const sourceDir = join(root, "input");
+  const outFile = join(root, "generated", "plugin-manifests.ts");
+  await mkdir(sourceDir);
+  await writeFile(join(sourceDir, "runtime.json"), JSON.stringify({
+    schemaVersion: 3,
+    pluginId: "example.runtime",
+    packageVersion: "1.0.0",
+    requestedCapabilities: [],
+    dependencies: [],
+    runtime: {
+      kind: "dynamic-worker",
+      codeArtifactDigest:
+        "sha256:5b056b8472e4c36854cb9fdaa5c173b5dada6ddf49e86006c5851eff8091e8c8",
+    },
+  }));
+
+  await runBuild(sourceDir, outFile);
+
+  const generated = await readFile(outFile, "utf8");
+  assert.match(generated, /"schemaVersion": 3/);
+  assert.match(generated, /"kind": "dynamic-worker"/);
+  assert.match(generated, /"codeArtifactDigest": "sha256:5b056b/);
+});
+
+test("rejects malformed schema v3 runtime descriptors", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "plugin-manifests-runtime-invalid-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const sourceDir = join(root, "input");
+  const outFile = join(root, "generated", "plugin-manifests.ts");
+  await mkdir(sourceDir);
+
+  for (const runtime of [
+    undefined,
+    {kind: "container", codeArtifactDigest: `sha256:${"a".repeat(64)}`},
+    {kind: "dynamic-worker", codeArtifactDigest: "sha256:not-a-digest"},
+    {kind: "dynamic-worker", codeArtifactDigest: `sha256:${"a".repeat(64)}`, env: {}},
+  ]) {
+    await writeFile(join(sourceDir, "runtime.json"), JSON.stringify({
+      schemaVersion: 3,
+      pluginId: "example.runtime",
+      packageVersion: "1.0.0",
+      requestedCapabilities: [],
+      dependencies: [],
+      runtime,
+    }));
+    await assert.rejects(runBuild(sourceDir, outFile), /runtime must/);
   }
 });
 

@@ -43,9 +43,14 @@ export async function buildRuntimePluginPlans(
       preflightFailures.push({installation, reason: "MANIFEST_INTEGRITY_MISMATCH"});
       continue;
     }
+    if (manifest.runtime === undefined) {
+      preflightFailures.push({installation, reason: "RUNTIME_ARTIFACT_NOT_DECLARED"});
+      continue;
+    }
     plans.push({
       installation,
       dependencies: [...manifest.dependencies],
+      runtime: {...manifest.runtime},
     });
   }
   return {plans, preflightFailures};

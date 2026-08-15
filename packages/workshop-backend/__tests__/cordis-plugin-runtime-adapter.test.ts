@@ -20,6 +20,10 @@ function plan(packageVersion = "1.0.0"): RuntimePluginPlan {
       config: null,
     },
     dependencies: [],
+    runtime: {
+      kind: "dynamic-worker",
+      codeArtifactDigest: `sha256:${"a".repeat(64)}`,
+    },
   };
 }
 

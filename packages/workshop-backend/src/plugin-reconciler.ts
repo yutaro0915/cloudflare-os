@@ -3,6 +3,7 @@ import type {
   EffectivePluginConflict,
   EffectivePluginInstallation,
 } from "./plugin-effective-configuration.js";
+import type { PluginRuntimeDescriptor } from "./plugin-manifest-registry.js";
 
 /** One verified runtime candidate enriched with host-resolved plugin dependencies. */
 export interface RuntimePluginPlan {
@@ -11,6 +12,9 @@ export interface RuntimePluginPlan {
 
   /** Plugin identifiers required at runtime, from a verified immutable manifest. */
   dependencies: readonly string[];
+
+  /** Isolated runtime artifact copied only from a digest-matched verified manifest. */
+  runtime: PluginRuntimeDescriptor;
 }
 
 /** One desired candidate rejected before runtime activation by trusted host verification. */
@@ -19,7 +23,9 @@ export interface RuntimePluginPreflightFailure {
   installation: EffectivePluginInstallation;
 
   /** Stable failure derived from exact immutable manifest verification. */
-  reason: "MANIFEST_NOT_FOUND" | "MANIFEST_INTEGRITY_MISMATCH";
+  reason:
+    "MANIFEST_NOT_FOUND" | "MANIFEST_INTEGRITY_MISMATCH" |
+    "RUNTIME_ARTIFACT_NOT_DECLARED";
 }
 
 /** Runtime boundary that atomically replaces or removes one isolated plugin activation. */
@@ -250,7 +256,8 @@ export class PluginReconciler<Lease> {
         (state?.status === "failed" && (
           state.reason === "CYCLIC_DEPENDENCY" ||
           state.reason === "MANIFEST_NOT_FOUND" ||
-          state.reason === "MANIFEST_INTEGRITY_MISMATCH"
+          state.reason === "MANIFEST_INTEGRITY_MISMATCH" ||
+          state.reason === "RUNTIME_ARTIFACT_NOT_DECLARED"
         ));
       if (
         isConditionalCandidate &&

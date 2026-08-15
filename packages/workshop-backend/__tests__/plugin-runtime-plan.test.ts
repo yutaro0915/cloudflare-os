@@ -25,11 +25,15 @@ function installation(overrides: Partial<EffectivePluginInstallation> = {}):
 describe("runtime plugin plan builder", () => {
   it("adds only dependencies from the digest-matched verified manifest", async () => {
     const manifest: PluginManifest = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       pluginId: "example.notes",
       packageVersion: "2.0.0",
       requestedCapabilities: ["ui.panel"],
       dependencies: ["example.storage", "example.auth"],
+      runtime: {
+        kind: "dynamic-worker",
+        codeArtifactDigest: `sha256:${"a".repeat(64)}`,
+      },
     };
     const resolver = await BundledPluginManifestResolver.create([manifest]);
     const verified = await resolver.resolve(manifest.pluginId, manifest.packageVersion);
@@ -42,17 +46,44 @@ describe("runtime plugin plan builder", () => {
       plans: [{
         installation: installation({manifestDigest: verified!.manifestDigest}),
         dependencies: ["example.auth", "example.storage"],
+        runtime: manifest.runtime,
       }],
       preflightFailures: [],
     });
   });
 
+  it("keeps a metadata-only legacy manifest as a local preflight failure", async () => {
+    const manifest: PluginManifest = {
+      schemaVersion: 1,
+      pluginId: "example.notes",
+      packageVersion: "2.0.0",
+      requestedCapabilities: ["ui.panel"],
+    };
+    const resolver = await BundledPluginManifestResolver.create([manifest]);
+    const verified = await resolver.resolve("example.notes", "2.0.0");
+
+    await expect(buildRuntimePluginPlans([
+      installation({manifestDigest: verified!.manifestDigest}),
+    ], resolver)).resolves.toEqual({
+      plans: [],
+      preflightFailures: [{
+        installation: installation({manifestDigest: verified!.manifestDigest}),
+        reason: "RUNTIME_ARTIFACT_NOT_DECLARED",
+      }],
+    });
+  });
+
   it("keeps manifest failures beside valid plans so unrelated plugins can continue", async () => {
     const validManifest: PluginManifest = {
-      schemaVersion: 1,
+      schemaVersion: 3,
       pluginId: "example.valid",
       packageVersion: "1.0.0",
       requestedCapabilities: [],
+      dependencies: [],
+      runtime: {
+        kind: "dynamic-worker",
+        codeArtifactDigest: `sha256:${"b".repeat(64)}`,
+      },
     };
     const resolver = await BundledPluginManifestResolver.create([validManifest]);
     const verified = await resolver.resolve("example.valid", "1.0.0");
@@ -76,6 +107,7 @@ describe("runtime plugin plan builder", () => {
           grantedCapabilities: [],
         }),
         dependencies: [],
+        runtime: validManifest.runtime,
       }],
       preflightFailures: [{
         installation: installation(),

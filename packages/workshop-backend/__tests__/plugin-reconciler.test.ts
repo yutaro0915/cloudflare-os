@@ -86,7 +86,14 @@ function installation(
 
 function plan(pluginId: string, packageVersion = "1.0.0",
     dependencies: readonly string[] = []): RuntimePluginPlan {
-  return {installation: installation(pluginId, packageVersion), dependencies};
+  return {
+    installation: installation(pluginId, packageVersion),
+    dependencies,
+    runtime: {
+      kind: "dynamic-worker",
+      codeArtifactDigest: `sha256:${"a".repeat(64)}`,
+    },
+  };
 }
 
 function preflightFailure(

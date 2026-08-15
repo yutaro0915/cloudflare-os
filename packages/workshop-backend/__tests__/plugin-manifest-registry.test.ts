@@ -90,6 +90,93 @@ describe("bundled plugin manifest resolver", () => {
     }
   });
 
+  it("binds a schema v3 Dynamic Worker artifact descriptor into the manifest digest", async () => {
+    const source: PluginManifest = {
+      schemaVersion: 3,
+      pluginId: "example.runtime",
+      packageVersion: "1.0.0",
+      requestedCapabilities: [],
+      dependencies: ["example.storage", "example.auth"],
+      runtime: {
+        kind: "dynamic-worker",
+        codeArtifactDigest:
+          "sha256:5b056b8472e4c36854cb9fdaa5c173b5dada6ddf49e86006c5851eff8091e8c8",
+      },
+    };
+    const resolver = await BundledPluginManifestResolver.create([source]);
+    const resolved = await resolver.resolve("example.runtime", "1.0.0");
+
+    expect(resolved).toMatchObject({
+      schemaVersion: 3,
+      runtime: source.runtime,
+      manifestDigest:
+        "sha256:2e1cf7b634246008fc83d5c0300411dc00f9235529ac576a86723860b21fcfb5",
+    });
+    expect(Reflect.set(resolved!.runtime!, "codeArtifactDigest", `sha256:${"0".repeat(64)}`))
+      .toBe(false);
+
+    const reordered = await BundledPluginManifestResolver.create([{
+      ...source,
+      dependencies: ["example.auth", "example.storage"],
+    }]);
+    await expect(reordered.resolve("example.runtime", "1.0.0")).resolves.toMatchObject({
+      manifestDigest: resolved!.manifestDigest,
+    });
+
+    const changed = await BundledPluginManifestResolver.create([{
+      ...source,
+      runtime: {
+        ...source.runtime,
+        codeArtifactDigest: `sha256:${"f".repeat(64)}`,
+      },
+    }]);
+    const changedManifest = await changed.resolve("example.runtime", "1.0.0");
+    expect(changedManifest!.manifestDigest).not.toBe(resolved!.manifestDigest);
+  });
+
+  it("hashes and returns the same v3 runtime snapshot when the source changes during hashing",
+    async () => {
+      const runtime = {
+        kind: "dynamic-worker" as const,
+        codeArtifactDigest: `sha256:${"a".repeat(64)}`,
+      };
+      const source: PluginManifest = {
+        schemaVersion: 3,
+        pluginId: "example.runtime",
+        packageVersion: "1.0.0",
+        requestedCapabilities: [],
+        dependencies: [],
+        runtime,
+      };
+
+      const pending = BundledPluginManifestResolver.create([source]);
+      expect(Reflect.set(runtime, "codeArtifactDigest", `sha256:${"f".repeat(64)}`)).toBe(true);
+      const resolver = await pending;
+
+      await expect(resolver.resolve("example.runtime", "1.0.0")).resolves.toMatchObject({
+        runtime: {codeArtifactDigest: `sha256:${"a".repeat(64)}`},
+      });
+    });
+
+  it("rejects runtime descriptor fields that the generator would reject", async () => {
+    const runtime = {
+      kind: "dynamic-worker" as const,
+      codeArtifactDigest: `sha256:${"a".repeat(64)}`,
+      env: {FORGED: true},
+    };
+    const source: PluginManifest = {
+      schemaVersion: 3,
+      pluginId: "example.runtime",
+      packageVersion: "1.0.0",
+      requestedCapabilities: [],
+      dependencies: [],
+      runtime,
+    };
+
+    await expect(BundledPluginManifestResolver.create([source]))
+      .rejects.toThrow("Invalid runtime descriptor in example.runtime@1.0.0");
+  });
+
   it("creates a verified snapshot that source and callers cannot mutate", async () => {
     const requestedCapabilities = ["ui.panel"];
     const source: PluginManifest = {
