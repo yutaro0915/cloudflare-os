@@ -33,14 +33,15 @@ function parseManifest(file, parsed) {
     pluginId,
     packageVersion,
     requestedCapabilities,
+    dependencies,
     ...unknown
   } = parsed;
   const unknownKeys = Object.keys(unknown);
   if (unknownKeys.length > 0) {
     throw new TypeError(`${file}: unknown keys: ${unknownKeys.join(", ")}`);
   }
-  if (schemaVersion !== 1) {
-    throw new TypeError(`${file}: schemaVersion must be 1`);
+  if (schemaVersion !== 1 && schemaVersion !== 2) {
+    throw new TypeError(`${file}: schemaVersion must be 1 or 2`);
   }
   for (const [name, value] of [["pluginId", pluginId], ["packageVersion", packageVersion]]) {
     if (typeof value !== "string" || value.trim().length === 0) {
@@ -60,7 +61,30 @@ function parseManifest(file, parsed) {
   if (new Set(requestedCapabilities).size !== requestedCapabilities.length) {
     throw new TypeError(`${file}: requestedCapabilities must not contain duplicates`);
   }
-  return {schemaVersion, pluginId, packageVersion, requestedCapabilities};
+  if (schemaVersion === 1) {
+    if (dependencies !== undefined) {
+      throw new TypeError(`${file}: dependencies require schemaVersion 2`);
+    }
+    return {schemaVersion, pluginId, packageVersion, requestedCapabilities};
+  }
+  if (
+    !Array.isArray(dependencies)
+    || dependencies.some(
+      dependency => typeof dependency !== "string" || dependency.trim().length === 0,
+    )
+  ) {
+    throw new TypeError(`${file}: dependencies must contain only non-empty strings`);
+  }
+  if (new Set(dependencies).size !== dependencies.length) {
+    throw new TypeError(`${file}: dependencies must not contain duplicates`);
+  }
+  return {
+    schemaVersion,
+    pluginId,
+    packageVersion,
+    requestedCapabilities,
+    dependencies: dependencies.toSorted(),
+  };
 }
 
 for (const file of files) {

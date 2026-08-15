@@ -3,6 +3,7 @@ import type { EffectivePluginInstallation } from "../src/plugin-effective-config
 import {
   PluginReconciler,
   type PluginRuntimeAdapter,
+  type RuntimePluginPreflightFailure,
   type RuntimePluginPlan,
 } from "../src/plugin-reconciler.js";
 
@@ -88,6 +89,13 @@ function plan(pluginId: string, packageVersion = "1.0.0",
   return {installation: installation(pluginId, packageVersion), dependencies};
 }
 
+function preflightFailure(
+    pluginId: string,
+    reason: RuntimePluginPreflightFailure["reason"] = "MANIFEST_INTEGRITY_MISMATCH",
+): RuntimePluginPreflightFailure {
+  return {installation: installation(pluginId), reason};
+}
+
 function runtimeIdentity(pluginId: string, packageVersion = "1.0.0") {
   return {
     installationId: `installation-${pluginId}`,
@@ -98,6 +106,39 @@ function runtimeIdentity(pluginId: string, packageVersion = "1.0.0") {
 }
 
 describe("plugin reconciler", () => {
+  it("fails an invalid manifest, suspends its dependent, and activates unrelated plugins", async () => {
+    const runtime = new FakeRuntimeAdapter();
+    const reconciler = new PluginReconciler(runtime);
+
+    await expect(reconciler.reconcile({
+      ok: true,
+      plans: [plan("a.consumer", "1.0.0", ["b.invalid"]), plan("c.unrelated")],
+      preflightFailures: [preflightFailure("b.invalid")],
+    })).resolves.toEqual({
+      ok: true,
+      states: [
+        {
+          pluginId: "a.consumer",
+          status: "suspended",
+          candidate: runtimeIdentity("a.consumer"),
+          reason: "DEPENDENCY_UNAVAILABLE",
+        },
+        {
+          pluginId: "b.invalid",
+          status: "failed",
+          candidate: runtimeIdentity("b.invalid"),
+          reason: "MANIFEST_INTEGRITY_MISMATCH",
+        },
+        {
+          pluginId: "c.unrelated",
+          status: "active",
+          active: runtimeIdentity("c.unrelated"),
+        },
+      ],
+    });
+    expect(runtime.events).toEqual(["replace:c.unrelated@1.0.0:none"]);
+  });
+
   it("activates an initial desired plugin through the runtime port", async () => {
     const runtime = new FakeRuntimeAdapter();
     const reconciler = new PluginReconciler(runtime);

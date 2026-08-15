@@ -13,6 +13,15 @@ export interface RuntimePluginPlan {
   dependencies: readonly string[];
 }
 
+/** One desired candidate rejected before runtime activation by trusted host verification. */
+export interface RuntimePluginPreflightFailure {
+  /** Installation that could not be authorized as a runtime candidate. */
+  installation: EffectivePluginInstallation;
+
+  /** Stable failure derived from exact immutable manifest verification. */
+  reason: "MANIFEST_NOT_FOUND" | "MANIFEST_INTEGRITY_MISMATCH";
+}
+
 /** Runtime boundary that atomically replaces or removes one isolated plugin activation. */
 export interface PluginRuntimeAdapter<Lease> {
   /**
@@ -78,7 +87,8 @@ export type PluginReconciliationState = {
   /** Stable failure reason. */
   reason:
     "ACTIVATION_FAILED" | "CYCLIC_DEPENDENCY" |
-    "DEACTIVATION_FAILED" | "DEACTIVATION_BLOCKED";
+    "DEACTIVATION_FAILED" | "DEACTIVATION_BLOCKED" |
+    RuntimePluginPreflightFailure["reason"];
 
   /** Previous runtime retained after the failed operation. */
   retainedActive?: RuntimePluginIdentity;
@@ -91,6 +101,9 @@ export type PluginReconciliationInput = {
 
   /** Complete desired runtime plan. */
   plans: readonly RuntimePluginPlan[];
+
+  /** Desired candidates that failed trusted host verification before activation. */
+  preflightFailures?: readonly RuntimePluginPreflightFailure[];
 } | Extract<EffectivePluginConfigurationResult, {ok: false}>;
 
 /** Plain-data result of one serialized reconciliation pass. */
@@ -207,8 +220,17 @@ export class PluginReconciler<Lease> {
       a.installation.pluginId < b.installation.pluginId ? -1 :
       a.installation.pluginId > b.installation.pluginId ? 1 : 0);
     const plansByPluginId = new Map(plans.map(plan => [plan.installation.pluginId, plan]));
+    const preflightFailures = (input.preflightFailures ?? []).toSorted((a, b) =>
+      a.installation.pluginId < b.installation.pluginId ? -1 :
+      a.installation.pluginId > b.installation.pluginId ? 1 : 0);
+    const failuresByPluginId = new Map(
+      preflightFailures.map(failure => [failure.installation.pluginId, failure]),
+    );
     const cyclicPluginIds = findCyclicPluginIds(plansByPluginId);
-    const desiredPluginIds = new Set(plans.map(plan => plan.installation.pluginId));
+    const desiredPluginIds = new Set([
+      ...plans.map(plan => plan.installation.pluginId),
+      ...preflightFailures.map(failure => failure.installation.pluginId),
+    ]);
     const processing = new Set<string>();
     const activeClosureCanRemain = (
         pluginId: string,
@@ -221,7 +243,11 @@ export class PluginReconciler<Lease> {
       if (current === undefined || visiting.has(pluginId)) return false;
       const state = statesByPluginId.get(pluginId);
       const isConditionalCandidate = state?.status === "suspended" ||
-        (state?.status === "failed" && state.reason === "CYCLIC_DEPENDENCY");
+        (state?.status === "failed" && (
+          state.reason === "CYCLIC_DEPENDENCY" ||
+          state.reason === "MANIFEST_NOT_FOUND" ||
+          state.reason === "MANIFEST_INTEGRITY_MISMATCH"
+        ));
       if (
         isConditionalCandidate &&
         current.plan.dependencies.some(dependency => !desiredPluginIds.has(dependency))
@@ -275,7 +301,7 @@ export class PluginReconciler<Lease> {
         });
         return;
       }
-      if (plan.dependencies.some(dependency => !plansByPluginId.has(dependency))) {
+      if (plan.dependencies.some(dependency => !desiredPluginIds.has(dependency))) {
         await recordUnavailable({
           pluginId,
           status: "suspended",
@@ -287,13 +313,15 @@ export class PluginReconciler<Lease> {
 
       processing.add(pluginId);
       for (const dependency of plan.dependencies) {
-        await processPlan(plansByPluginId.get(dependency)!);
+        const dependencyPlan = plansByPluginId.get(dependency);
+        if (dependencyPlan !== undefined) await processPlan(dependencyPlan);
       }
       processing.delete(pluginId);
       for (const dependency of plan.dependencies) {
         await settleRetainedClosure(dependency, new Set());
       }
-      if (plan.dependencies.some(dependency => !activeClosureCanRemain(dependency))) {
+      if (plan.dependencies.some(dependency =>
+        failuresByPluginId.has(dependency) || !activeClosureCanRemain(dependency))) {
         await recordUnavailable({
           pluginId,
           status: "suspended",
@@ -329,6 +357,17 @@ export class PluginReconciler<Lease> {
       }
     };
 
+    for (const failure of preflightFailures) {
+      const pluginId = failure.installation.pluginId;
+      const current = this.#active.get(pluginId);
+      statesByPluginId.set(pluginId, {
+        pluginId,
+        status: "failed",
+        candidate: identity(failure.installation),
+        reason: failure.reason,
+        ...(current === undefined ? {} : {retainedActive: identity(current.plan.installation)}),
+      });
+    }
     for (const plan of plans) {
       await processPlan(plan);
     }
@@ -406,12 +445,13 @@ export class PluginReconciler<Lease> {
             });
           }
         } catch {
+          const desiredInstallation = plansByPluginId.get(pluginId)?.installation ??
+            failuresByPluginId.get(pluginId)?.installation;
           statesByPluginId.set(pluginId, {
             pluginId,
             status: "failed",
-            ...(plansByPluginId.has(pluginId)
-              ? {candidate: identity(plansByPluginId.get(pluginId)!.installation)}
-              : {}),
+            ...(desiredInstallation === undefined
+              ? {} : {candidate: identity(desiredInstallation)}),
             reason: "DEACTIVATION_FAILED",
             retainedActive: identity(current.plan.installation),
           });
@@ -421,12 +461,13 @@ export class PluginReconciler<Lease> {
 
       for (const pluginId of [...pendingRemovals].toSorted()) {
         const current = this.#active.get(pluginId)!;
+        const desiredInstallation = plansByPluginId.get(pluginId)?.installation ??
+          failuresByPluginId.get(pluginId)?.installation;
         statesByPluginId.set(pluginId, {
           pluginId,
           status: "failed",
-          ...(plansByPluginId.has(pluginId)
-            ? {candidate: identity(plansByPluginId.get(pluginId)!.installation)}
-            : {}),
+          ...(desiredInstallation === undefined
+            ? {} : {candidate: identity(desiredInstallation)}),
           reason: "DEACTIVATION_BLOCKED",
           retainedActive: identity(current.plan.installation),
         });

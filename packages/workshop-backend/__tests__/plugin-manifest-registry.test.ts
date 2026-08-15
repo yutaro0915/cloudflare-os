@@ -23,15 +23,71 @@ describe("bundled plugin manifest resolver", () => {
 
     await expect(resolver.resolve("example.notes", "1.0.0")).resolves.toEqual({
       ...versionOne,
+      dependencies: [],
       manifestDigest:
         "sha256:1f277c6e9735b5b5c75aec6498a48156638186317f5140e4c533d16569c743e7",
     });
     await expect(resolver.resolve("example.notes", "2.0.0")).resolves.toEqual({
       ...versionTwo,
+      dependencies: [],
       manifestDigest:
         "sha256:91115bef6acbd770195c0439904129b62d5b085344e085e6a1b7530d83dbeb1e",
     });
     await expect(resolver.resolve("example.notes", "3.0.0")).resolves.toBeNull();
+  });
+
+  it("verifies schema v2 dependencies as an immutable canonical set", async () => {
+    const dependencies = ["example.storage", "example.auth"];
+    const source: PluginManifest = {
+      schemaVersion: 2,
+      pluginId: "example.notes",
+      packageVersion: "2.0.0",
+      requestedCapabilities: ["ui.panel"],
+      dependencies,
+    };
+
+    const resolver = await BundledPluginManifestResolver.create([source]);
+    dependencies[0] = "forged.dependency";
+    const resolved = await resolver.resolve("example.notes", "2.0.0");
+
+    expect(resolved).toMatchObject({
+      schemaVersion: 2,
+      pluginId: "example.notes",
+      packageVersion: "2.0.0",
+      dependencies: ["example.auth", "example.storage"],
+      manifestDigest:
+        "sha256:1fc5b02a59ff45bf212f71072798e1049ee0690f8d9cdc9bf4781c9c7fade6b2",
+    });
+    expect(Reflect.set(resolved!.dependencies, 0, "forged.result")).toBe(false);
+
+    const reordered = await BundledPluginManifestResolver.create([{
+      ...source,
+      dependencies: ["example.auth", "example.storage"],
+    }]);
+    await expect(reordered.resolve("example.notes", "2.0.0")).resolves.toMatchObject({
+      manifestDigest: resolved!.manifestDigest,
+    });
+
+    const changed = await BundledPluginManifestResolver.create([{
+      ...source,
+      dependencies: ["example.auth", "example.search"],
+    }]);
+    const changedManifest = await changed.resolve("example.notes", "2.0.0");
+    expect(changedManifest!.manifestDigest).not.toBe(resolved!.manifestDigest);
+  });
+
+  it("rejects invalid dependency sets before calling them verified", async () => {
+    const base = {
+      schemaVersion: 2,
+      pluginId: "example.notes",
+      packageVersion: "2.0.0",
+      requestedCapabilities: [],
+    } as const;
+
+    for (const dependencies of [["example.auth", "example.auth"], ["example.auth", " "]]) {
+      await expect(BundledPluginManifestResolver.create([{...base, dependencies}]))
+        .rejects.toThrow("Invalid dependencies in example.notes@2.0.0");
+    }
   });
 
   it("creates a verified snapshot that source and callers cannot mutate", async () => {
@@ -45,6 +101,7 @@ describe("bundled plugin manifest resolver", () => {
     const resolver = await BundledPluginManifestResolver.create([source]);
     const expected: VerifiedPluginManifest = {
       ...source,
+      dependencies: [],
       manifestDigest:
         "sha256:1f277c6e9735b5b5c75aec6498a48156638186317f5140e4c533d16569c743e7",
       requestedCapabilities: ["ui.panel"],
@@ -73,6 +130,7 @@ describe("bundled plugin manifest resolver", () => {
 
     await expect(resolver.resolve("example.notes", "1.0.0")).resolves.toMatchObject({
       pluginId: "example.notes",
+      dependencies: [],
       manifestDigest:
         "sha256:1f277c6e9735b5b5c75aec6498a48156638186317f5140e4c533d16569c743e7",
     });

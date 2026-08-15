@@ -118,7 +118,7 @@ test("rejects a manifest whose root is not an object", async (t) => {
   );
 });
 
-test("rejects an unsupported manifest schema version", async (t) => {
+test("builds schema v2 dependencies in deterministic order", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "plugin-manifests-schema-"));
   t.after(() => rm(root, {recursive: true, force: true}));
   const sourceDir = join(root, "input");
@@ -129,12 +129,82 @@ test("rejects an unsupported manifest schema version", async (t) => {
     pluginId: "example.notes",
     packageVersion: "1.0.0",
     requestedCapabilities: [],
+    dependencies: ["example.storage", "example.auth"],
   }));
 
-  await assert.rejects(
-    runBuild(sourceDir, outFile),
-    /notes\.json: schemaVersion must be 1/,
+  await runBuild(sourceDir, outFile);
+
+  const generated = await readFile(outFile, "utf8");
+  assert.match(generated, /"schemaVersion": 2/);
+  assert.match(
+    generated,
+    /"dependencies": \[\s*"example\.auth",\s*"example\.storage"\s*\]/,
   );
+});
+
+test("rejects malformed or duplicate schema v2 dependencies", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "plugin-manifests-dependencies-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const sourceDir = join(root, "input");
+  const outFile = join(root, "generated", "plugin-manifests.ts");
+  await mkdir(sourceDir);
+
+  for (const dependencies of ["example.auth", ["example.auth", " "], ["a", "a"]]) {
+    await writeFile(join(sourceDir, "notes.json"), JSON.stringify({
+      schemaVersion: 2,
+      pluginId: "example.notes",
+      packageVersion: "1.0.0",
+      requestedCapabilities: [],
+      dependencies,
+    }));
+
+    await assert.rejects(runBuild(sourceDir, outFile), /dependencies must/);
+  }
+});
+
+test("rejects dependency declarations that do not match their schema", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "plugin-manifests-schema-rejection-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const sourceDir = join(root, "input");
+  const outFile = join(root, "generated", "plugin-manifests.ts");
+  await mkdir(sourceDir);
+
+  const invalid = [
+    {
+      manifest: {
+        schemaVersion: 3,
+        pluginId: "example.notes",
+        packageVersion: "1.0.0",
+        requestedCapabilities: [],
+        dependencies: [],
+      },
+      error: /schemaVersion must be 1 or 2/,
+    },
+    {
+      manifest: {
+        schemaVersion: 1,
+        pluginId: "example.notes",
+        packageVersion: "1.0.0",
+        requestedCapabilities: [],
+        dependencies: [],
+      },
+      error: /dependencies require schemaVersion 2/,
+    },
+    {
+      manifest: {
+        schemaVersion: 2,
+        pluginId: "example.notes",
+        packageVersion: "1.0.0",
+        requestedCapabilities: [],
+      },
+      error: /dependencies must contain only non-empty strings/,
+    },
+  ];
+
+  for (const {manifest, error} of invalid) {
+    await writeFile(join(sourceDir, "notes.json"), JSON.stringify(manifest));
+    await assert.rejects(runBuild(sourceDir, outFile), error);
+  }
 });
 
 test("rejects blank plugin and package identifiers", async (t) => {

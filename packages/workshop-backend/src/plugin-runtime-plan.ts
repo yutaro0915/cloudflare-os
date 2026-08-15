@@ -1,0 +1,52 @@
+import type { EffectivePluginInstallation } from "./plugin-effective-configuration.js";
+import type { PluginManifestResolver } from "./plugin-manifest-registry.js";
+import type {
+  PluginReconciliationInput,
+  RuntimePluginPlan,
+  RuntimePluginPreflightFailure,
+} from "./plugin-reconciler.js";
+
+/** Result of enriching one effective snapshot from verified immutable manifests. */
+export type BuildRuntimePluginPlansResult = Omit<
+  Extract<PluginReconciliationInput, {ok: true}>, "ok"
+> & {preflightFailures: RuntimePluginPreflightFailure[]; plans: RuntimePluginPlan[]};
+
+function approvalsExactlyMatch(
+    requested: readonly string[], granted: readonly string[]): boolean {
+  if (requested.length !== granted.length || new Set(granted).size !== granted.length) return false;
+  const grantedSet = new Set(granted);
+  return requested.every(capability => grantedSet.has(capability));
+}
+
+/**
+ * Enriches desired installations only from digest-matched verified manifests.
+ *
+ * Invalid candidates remain explicit failures so the reconciler can suspend their dependents while
+ * still honoring the system-wide requirement to continue unrelated plugins.
+ */
+export async function buildRuntimePluginPlans(
+    installations: readonly EffectivePluginInstallation[],
+    resolver: PluginManifestResolver): Promise<BuildRuntimePluginPlansResult> {
+  const snapshot = structuredClone(installations);
+  const plans: RuntimePluginPlan[] = [];
+  const preflightFailures: RuntimePluginPreflightFailure[] = [];
+  for (const installation of snapshot) {
+    const manifest = await resolver.resolve(installation.pluginId, installation.packageVersion);
+    if (manifest === null) {
+      preflightFailures.push({installation, reason: "MANIFEST_NOT_FOUND"});
+      continue;
+    }
+    if (
+      manifest.manifestDigest !== installation.manifestDigest ||
+      !approvalsExactlyMatch(manifest.requestedCapabilities, installation.grantedCapabilities)
+    ) {
+      preflightFailures.push({installation, reason: "MANIFEST_INTEGRITY_MISMATCH"});
+      continue;
+    }
+    plans.push({
+      installation,
+      dependencies: [...manifest.dependencies],
+    });
+  }
+  return {plans, preflightFailures};
+}
