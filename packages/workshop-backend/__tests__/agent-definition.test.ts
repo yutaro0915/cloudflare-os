@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentDefinition, SkillDefinition } from "@gadgets/workshop-shared/api";
+import {CUSTOM_AGENT_TOOL_NAMES} from "@gadgets/workshop-shared/api";
 import {
   appendAgentDefinitionInstructions,
   createReadSkillTool,
@@ -27,6 +28,24 @@ const skill: SkillDefinition = {
 };
 
 describe("validateAgentDefinition", () => {
+  it("rejects plugin authority that is not part of the saved-agent catalog", () => {
+    expect(CUSTOM_AGENT_TOOL_NAMES).not.toEqual(expect.arrayContaining([
+      "generatePlugin",
+      "publishPlugin",
+      "installUserPlugin",
+      "openPluginStore",
+    ]));
+    expect(() => validateAgentDefinition({
+      version: 3,
+      id: "self-evolver",
+      name: "Self evolver",
+      modelId: "gpt-5.6-sol",
+      agentsMd: "",
+      skillIds: [],
+      tools: {enabled: ["publishPlugin"]},
+    })).toThrow(/Unknown agent tool "publishPlugin"/);
+  });
+
   it("accepts a complete version 3 definition", () => {
     let definition = {
       version: 3,

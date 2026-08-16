@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 4,
+  "pluginId": "circle.focus-guide",
+  "packageVersion": "1.0.0",
+  "requestedCapabilities": [],
+  "dependencies": [],
+  "runtime": {
+    "kind": "dynamic-worker",
+    "codeArtifactDigest": "sha256:b60621d76f406b4402e128603280fceeb248955a8bc77571ab06d44c13900d8a"
+  },
+  "presentation": {
+    "title": "Circle Focus Guide",
+    "summary": "A lightweight focus ritual for programming-circle sessions."
+  },
+  "uiContributions": [
+    {
+      "contributionId": "focus-session",
+      "slot": "user-plugin.details",
+      "title": "Focus Guide",
+      "renderer": {
+        "kind": "worker-rendered-document-v1",
+        "codeArtifactDigest": "sha256:63da670549e4c3ce5775c57b096eec8fa5bce6c5d3ec6d48670e2c81c3ddfe37",
+        "height": 260
+      }
+    }
+  ]
+}

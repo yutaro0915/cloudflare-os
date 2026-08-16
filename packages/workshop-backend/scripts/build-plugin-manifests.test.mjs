@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,6 +71,27 @@ test("builds a deterministic bundled manifest module from exact package versions
       requestedCapabilities: ["ui.panel", "agent.catalog.read"],
     },
   ]);
+});
+
+test("does not rewrite an unchanged generated module", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "plugin-manifests-stable-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const sourceDir = join(root, "input");
+  const outFile = join(root, "generated", "plugin-manifests.ts");
+  await mkdir(sourceDir);
+  await writeFile(join(sourceDir, "notes.json"), JSON.stringify({
+    schemaVersion: 1,
+    pluginId: "example.notes",
+    packageVersion: "1.0.0",
+    requestedCapabilities: [],
+  }));
+
+  await runBuild(sourceDir, outFile);
+  const firstModifiedAt = (await stat(outFile)).mtimeMs;
+  await new Promise(resolve => setTimeout(resolve, 20));
+  await runBuild(sourceDir, outFile);
+
+  assert.equal((await stat(outFile)).mtimeMs, firstModifiedAt);
 });
 
 test("builds an empty registry when the deployment has no manifest directory", async (t) => {

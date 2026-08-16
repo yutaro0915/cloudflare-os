@@ -176,7 +176,7 @@ function DetachedStateCard({state, controller}: {
 }
 
 export function PluginsPage() {
-  useDocumentTitle('Plugins')
+  useDocumentTitle('Plugin Store')
   const {authenticatedApi} = useAuthenticatedApi()
   const controller = useUserPluginCenter(authenticatedApi)
 
@@ -197,16 +197,23 @@ export function PluginsPage() {
   return (
     <div className="mx-auto w-full max-w-5xl px-6 pb-16 pt-10 sm:px-10">
       <header className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight text-kumo-default">Plugin Center</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-kumo-default">Plugin Store</h1>
         <p className="mt-1 max-w-2xl text-[13px] leading-5 text-kumo-subtle">
-          Install exact reviewed versions, inspect their declared capabilities, and manage retained plugin data.
+          Install exact human-reviewed versions, inspect their declared capabilities, and manage retained plugin data.
         </p>
+        <div className="mt-4 max-w-2xl rounded-xl border border-kumo-line bg-kumo-tint px-4 py-3">
+          <p className="text-[12px] font-semibold text-kumo-default">AI publishing is locked</p>
+          <p className="mt-1 text-[12px] leading-5 text-kumo-subtle">
+            Packages enter this Store only through reviewed source and a deployment build. Agents receive no authoring,
+            publishing, or installation authority.
+          </p>
+        </div>
         {controller.error && <p role="alert" className="mt-3 text-[12px] text-kumo-danger">{controller.error}</p>}
       </header>
 
       <section aria-labelledby="plugin-catalog-heading">
         <h2 id="plugin-catalog-heading" className="mb-3 text-[12px] font-semibold uppercase tracking-wide text-kumo-inactive">
-          Available and installed
+          Human-reviewed catalog
         </h2>
         {controller.view.plugins.length === 0 ? (
           <div className="rounded-xl border border-dashed border-kumo-line px-6 py-12 text-center text-[13px] text-kumo-inactive">

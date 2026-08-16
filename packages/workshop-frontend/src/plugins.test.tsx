@@ -102,6 +102,9 @@ describe('PluginsPage crash recovery actions', () => {
     root = createRoot(container)
     await act(async () => root!.render(<PluginsPage />))
 
+    expect(container.textContent).toContain('Plugin Store')
+    expect(container.textContent).toContain('AI publishing is locked')
+
     expect(container.textContent).toContain('Resume uninstall')
     expect(container.textContent).toContain('Resume purge')
     const buttons = [...container.querySelectorAll('button')]

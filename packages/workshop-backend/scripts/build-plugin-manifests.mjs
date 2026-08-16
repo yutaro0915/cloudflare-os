@@ -328,6 +328,12 @@ export const BUNDLED_PLUGIN_CODE_ARTIFACTS = ${JSON.stringify(sortedCodeArtifact
 `;
 
 await mkdir(dirname(outFile), {recursive: true});
-await writeFile(outFile, generated);
+let existing;
+try {
+  existing = await readFile(outFile, "utf8");
+} catch (error) {
+  if (error?.code !== "ENOENT") throw error;
+}
+if (existing !== generated) await writeFile(outFile, generated);
 
 console.log(`Bundled ${manifests.length} plugin manifest(s) from ${sourceDir} -> ${outFile}`);

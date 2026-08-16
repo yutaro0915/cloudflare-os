@@ -202,7 +202,7 @@ export default function Sidebar({
             />
             <SidebarItem
               to="/plugins"
-              label="Plugins"
+              label="Plugin Store"
               icon={<PuzzlePiece size={14} weight="regular" />}
               collapsed={collapsed}
             />

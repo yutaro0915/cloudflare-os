@@ -1364,7 +1364,7 @@ export type CloudflareAccountOption = {
 // Supported AI providers.
 export type AiModelProvider = "openai" | "anthropic" | "google" | "cloudflare" | "ollama" | "deepseek";
 
-/** Tool names which a custom agent may allow or deny. */
+/** Tool names which a custom agent may allow or deny; plugin authoring and Store authority are intentionally absent. */
 export const CUSTOM_AGENT_TOOL_NAMES = [
   "readFile",
   "writeFile",
