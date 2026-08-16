@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 5,
+  "pluginId": "test.state-only",
+  "packageVersion": "1.0.0",
+  "requestedCapabilities": [],
+  "dependencies": [],
+  "runtime": {
+    "kind": "dynamic-worker",
+    "codeArtifactDigest": "sha256:a09a00ded0a96c15c3ce05a974ed5dfde6291574bb3666ac602bd2d0d1686e74"
+  },
+  "presentation": {
+    "title": "State-only test plugin",
+    "summary": "Exercises user-only installation state without navigation."
+  },
+  "state": {"kind": "installation"},
+  "uiContributions": []
+}

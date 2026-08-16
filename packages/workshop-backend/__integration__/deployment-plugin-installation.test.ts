@@ -43,6 +43,28 @@ beforeEach(async () => {
 });
 
 describe("deployment plugin installations", () => {
+  it("rejects a user-navigation plugin before deployment desired state changes", async () => {
+    using publicApi = await connect();
+    const account = await createAccount(publicApi, REJECT_ADMIN_USERNAME);
+    using authenticated = await publicApi.authenticate(account.token);
+    using admin = await authenticated.getAdminApi();
+    if (admin === null) throw new Error("Expected the configured admin capability.");
+
+    await expect(admin.installDeploymentPlugin({
+      pluginId: "test.kanban",
+      packageVersion: "1.0.0",
+      approvedCapabilities: ["plugin.ui.state.mutate"],
+    })).resolves.toEqual({ok: false, error: "PLUGIN_SCOPE_NOT_SUPPORTED"});
+    await expect(admin.installDeploymentPlugin({
+      pluginId: "test.state-only",
+      packageVersion: "1.0.0",
+      approvedCapabilities: [],
+    })).resolves.toEqual({ok: false, error: "PLUGIN_SCOPE_NOT_SUPPORTED"});
+    const host = exports.AdminSettings.getByName("");
+    await expect(host.listDeploymentPluginInstallationsForHost()).resolves.toEqual([]);
+    await expect(host.listDeploymentPluginAuditEventsForHost()).resolves.toEqual([]);
+  });
+
   it("permanently denies a canonical manifest with one append-only admin audit event", async () => {
     using publicApi = await connect();
     const account = await createAccount(publicApi, DENYLIST_ADMIN_USERNAME);

@@ -96,7 +96,7 @@ function parseDeclarativeDocument(file, value) {
   return {schemaVersion: 1, blocks};
 }
 
-function parseUiContributions(file, value) {
+function parseUiContributions(file, value, schemaVersion) {
   if (!Array.isArray(value) || value.length > 16) {
     throw new TypeError(`${file}: uiContributions must be a bounded array`);
   }
@@ -108,7 +108,8 @@ function parseUiContributions(file, value) {
       typeof contribution.contributionId !== "string" ||
       !UI_CONTRIBUTION_ID.test(contribution.contributionId) ||
       ids.has(contribution.contributionId) ||
-      contribution.slot !== "user-plugin.details" ||
+      (contribution.slot !== "user-plugin.details" &&
+        contribution.slot !== "user-plugin.navigation") ||
       !boundedText(contribution.title, 80) ||
       typeof contribution.renderer !== "object" || contribution.renderer === null ||
       Array.isArray(contribution.renderer)
@@ -117,6 +118,7 @@ function parseUiContributions(file, value) {
     const renderer = contribution.renderer;
     if (
       renderer.kind === "host-schema-v1" &&
+      contribution.slot === "user-plugin.details" &&
       hasOnlyKeys(renderer, ["kind", "document"])
     ) {
       return {
@@ -128,6 +130,7 @@ function parseUiContributions(file, value) {
     }
     if (
       renderer.kind === "worker-rendered-document-v1" &&
+      contribution.slot === "user-plugin.details" &&
       hasOnlyKeys(renderer, ["kind", "codeArtifactDigest", "height"]) &&
       /^sha256:[0-9a-f]{64}$/.test(renderer.codeArtifactDigest) &&
       Number.isInteger(renderer.height) && renderer.height >= 120 && renderer.height <= 800
@@ -140,6 +143,22 @@ function parseUiContributions(file, value) {
           kind: renderer.kind,
           codeArtifactDigest: renderer.codeArtifactDigest,
           height: renderer.height,
+        },
+      };
+    }
+    if (
+      schemaVersion === 5 && contribution.slot === "user-plugin.navigation" &&
+      renderer.kind === "worker-interactive-document-v1" &&
+      hasOnlyKeys(renderer, ["kind", "codeArtifactDigest"]) &&
+      /^sha256:[0-9a-f]{64}$/.test(renderer.codeArtifactDigest)
+    ) {
+      return {
+        contributionId: contribution.contributionId,
+        slot: contribution.slot,
+        title: contribution.title,
+        renderer: {
+          kind: renderer.kind,
+          codeArtifactDigest: renderer.codeArtifactDigest,
         },
       };
     }
@@ -162,6 +181,7 @@ function parseManifest(file, parsed) {
     dependencies,
     runtime,
     presentation,
+    state,
     uiContributions,
     ...unknown
   } = parsed;
@@ -169,8 +189,11 @@ function parseManifest(file, parsed) {
   if (unknownKeys.length > 0) {
     throw new TypeError(`${file}: unknown keys: ${unknownKeys.join(", ")}`);
   }
-  if (schemaVersion !== 1 && schemaVersion !== 2 && schemaVersion !== 3 && schemaVersion !== 4) {
-    throw new TypeError(`${file}: schemaVersion must be 1, 2, 3, or 4`);
+  if (
+    schemaVersion !== 1 && schemaVersion !== 2 && schemaVersion !== 3 &&
+    schemaVersion !== 4 && schemaVersion !== 5
+  ) {
+    throw new TypeError(`${file}: schemaVersion must be 1, 2, 3, 4, or 5`);
   }
   for (const [name, value] of [["pluginId", pluginId], ["packageVersion", packageVersion]]) {
     if (typeof value !== "string" || value.trim().length === 0) {
@@ -193,7 +216,7 @@ function parseManifest(file, parsed) {
   if (schemaVersion === 1) {
     if (
       dependencies !== undefined || runtime !== undefined ||
-      presentation !== undefined || uiContributions !== undefined
+      presentation !== undefined || state !== undefined || uiContributions !== undefined
     ) {
       throw new TypeError(`${file}: dependencies require schemaVersion 2`);
     }
@@ -211,7 +234,10 @@ function parseManifest(file, parsed) {
     throw new TypeError(`${file}: dependencies must not contain duplicates`);
   }
   if (schemaVersion === 2) {
-    if (runtime !== undefined || presentation !== undefined || uiContributions !== undefined) {
+    if (
+      runtime !== undefined || presentation !== undefined || state !== undefined ||
+      uiContributions !== undefined
+    ) {
       throw new TypeError(`${file}: runtime requires schemaVersion 3`);
     }
     return {
@@ -237,7 +263,7 @@ function parseManifest(file, parsed) {
     codeArtifactDigest: runtime.codeArtifactDigest,
   };
   if (schemaVersion === 3) {
-    if (presentation !== undefined || uiContributions !== undefined) {
+    if (presentation !== undefined || state !== undefined || uiContributions !== undefined) {
       throw new TypeError(`${file}: UI contributions require schemaVersion 4`);
     }
     return {
@@ -249,6 +275,25 @@ function parseManifest(file, parsed) {
       runtime: runtimeSnapshot,
     };
   }
+  if (schemaVersion === 4 && state !== undefined) {
+    throw new TypeError(`${file}: installation state requires schemaVersion 5`);
+  }
+  if (
+    schemaVersion === 5 &&
+    (typeof state !== "object" || state === null || Array.isArray(state) ||
+      !hasOnlyKeys(state, ["kind"]) || state.kind !== "installation")
+  ) {
+    throw new TypeError(`${file}: state must be an installation descriptor`);
+  }
+  const parsedUiContributions = parseUiContributions(file, uiContributions, schemaVersion);
+  if (
+    schemaVersion === 5 &&
+    parsedUiContributions.some(contribution =>
+      contribution.renderer.kind === "worker-interactive-document-v1") &&
+    !requestedCapabilities.includes("plugin.ui.state.mutate")
+  ) {
+    throw new TypeError(`${file}: interactive UI requires plugin.ui.state.mutate`);
+  }
   return {
     schemaVersion,
     pluginId,
@@ -257,7 +302,8 @@ function parseManifest(file, parsed) {
     dependencies: dependencies.toSorted(),
     runtime: runtimeSnapshot,
     presentation: parsePresentation(file, presentation),
-    uiContributions: parseUiContributions(file, uiContributions),
+    ...(schemaVersion === 5 ? {state: {kind: "installation"}} : {}),
+    uiContributions: parsedUiContributions,
   };
 }
 
@@ -291,7 +337,7 @@ for (let index = 1; index < manifests.length; index += 1) {
 
 for (const manifest of manifests) {
   if (
-    (manifest.schemaVersion === 3 || manifest.schemaVersion === 4) &&
+    (manifest.schemaVersion === 3 || manifest.schemaVersion === 4 || manifest.schemaVersion === 5) &&
     !codeArtifacts.has(manifest.runtime.codeArtifactDigest)
   ) {
     throw new TypeError(
@@ -299,10 +345,11 @@ for (const manifest of manifests) {
       manifest.runtime.codeArtifactDigest,
     );
   }
-  if (manifest.schemaVersion === 4) {
+  if (manifest.schemaVersion === 4 || manifest.schemaVersion === 5) {
     for (const contribution of manifest.uiContributions) {
       if (
-        contribution.renderer.kind === "worker-rendered-document-v1" &&
+        (contribution.renderer.kind === "worker-rendered-document-v1" ||
+          contribution.renderer.kind === "worker-interactive-document-v1") &&
         !codeArtifacts.has(contribution.renderer.codeArtifactDigest)
       ) {
         throw new TypeError(

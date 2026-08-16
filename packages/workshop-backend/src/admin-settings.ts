@@ -13,7 +13,10 @@ import { buildGatekeeperVendorMap } from './auth/auth-vendors.js';
 import { UserDurableObject } from './user.js';
 import { formatBlueprintsManifestVersion, installFormatBlueprints } from './format-blueprints.js';
 import { FORMAT_BLUEPRINTS } from './generated/format-blueprints.js';
-import type { PluginManifestResolver } from './plugin-manifest-registry.js';
+import {
+  isUserOnlyPluginManifest,
+  type PluginManifestResolver,
+} from './plugin-manifest-registry.js';
 import {
   isCanonicalPluginManifestDigest,
   resolveApprovedPluginManifest,
@@ -747,6 +750,9 @@ export class AdminApiImpl extends RpcTarget implements AdminApi {
     const resolved = await resolveApprovedPluginManifest(resolver, request);
     if (!resolved.ok) return resolved;
     const manifest = resolved.manifest;
+    if (isUserOnlyPluginManifest(manifest)) {
+      return {ok: false, error: "PLUGIN_SCOPE_NOT_SUPPORTED"};
+    }
     const {installationId} = await this.admin.putDeploymentPluginInstallation({
       pluginId: manifest.pluginId,
       packageVersion: manifest.packageVersion,

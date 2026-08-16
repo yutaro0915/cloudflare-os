@@ -194,13 +194,13 @@ test("rejects dependency declarations that do not match their schema", async (t)
   const invalid = [
     {
       manifest: {
-        schemaVersion: 5,
+        schemaVersion: 6,
         pluginId: "example.notes",
         packageVersion: "1.0.0",
         requestedCapabilities: [],
         dependencies: [],
       },
-      error: /schemaVersion must be 1, 2, 3, or 4/,
+      error: /schemaVersion must be 1, 2, 3, 4, or 5/,
     },
     {
       manifest: {
@@ -305,6 +305,45 @@ test("builds schema v4 presentation and host/worker-rendered UI contributions", 
   assert.match(generated, /"schemaVersion": 4/);
   assert.match(generated, /"kind": "host-schema-v1"/);
   assert.match(generated, /"kind": "worker-rendered-document-v1"/);
+  assert.match(generated, new RegExp(uiDigest));
+});
+
+test("builds schema v5 installation state and interactive navigation", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "plugin-manifests-interactive-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const sourceDir = join(root, "input");
+  const outFile = join(root, "generated", "plugin-manifests.ts");
+  await mkdir(sourceDir);
+  const runtimeCode = `export default { handshake() {} };\n`;
+  const uiCode = `export default { render() {}, reduce() {} };\n`;
+  const runtimeDigest = `sha256:${createHash("sha256").update(runtimeCode).digest("hex")}`;
+  const uiDigest = `sha256:${createHash("sha256").update(uiCode).digest("hex")}`;
+  await writeFile(join(sourceDir, "runtime.js"), runtimeCode);
+  await writeFile(join(sourceDir, "ui.js"), uiCode);
+  await writeFile(join(sourceDir, "plugin.json"), JSON.stringify({
+    schemaVersion: 5,
+    pluginId: "example.kanban",
+    packageVersion: "1.0.0",
+    requestedCapabilities: ["plugin.ui.state.mutate"],
+    dependencies: [],
+    runtime: {kind: "dynamic-worker", codeArtifactDigest: runtimeDigest},
+    presentation: {title: "Kanban", summary: "Persistent tasks."},
+    state: {kind: "installation"},
+    uiContributions: [{
+      contributionId: "board",
+      slot: "user-plugin.navigation",
+      title: "Kanban",
+      renderer: {kind: "worker-interactive-document-v1", codeArtifactDigest: uiDigest},
+    }],
+  }));
+
+  await runBuild(sourceDir, outFile);
+
+  const generated = await readFile(outFile, "utf8");
+  assert.match(generated, /"schemaVersion": 5/);
+  assert.match(generated, /"kind": "installation"/);
+  assert.match(generated, /"slot": "user-plugin\.navigation"/);
+  assert.match(generated, /"kind": "worker-interactive-document-v1"/);
   assert.match(generated, new RegExp(uiDigest));
 });
 

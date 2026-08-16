@@ -52,6 +52,7 @@ import {
 } from "./chat-attachment-validation";
 import { renderGadgetPdf } from "./browser-export";
 import { bundledPluginManifestResolver } from "./bundled-plugin-manifests.js";
+import {isUserOnlyPluginManifest} from "./plugin-manifest-registry.js";
 import { bundledPluginCodeArtifactResolver } from "./bundled-plugin-artifacts.js";
 import {
   WorkerLoaderPluginWorkerStarter,
@@ -7696,6 +7697,9 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     const resolved = await resolveApprovedPluginManifest(resolver, request);
     if (!resolved.ok) return resolved;
     const manifest = resolved.manifest;
+    if (isUserOnlyPluginManifest(manifest)) {
+      return {ok: false, error: "PLUGIN_SCOPE_NOT_SUPPORTED"};
+    }
     let result: InstallWorkspacePluginResult = {
       ok: false,
       error: "CAPABILITY_OWNER_APPROVAL_REQUIRED",

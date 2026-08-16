@@ -308,6 +308,80 @@ describe("bundled plugin manifest resolver", () => {
     }])).rejects.toThrow("Plugin manifest exceeds size limit: example.ui@1.0.0");
   });
 
+  it("binds a schema v5 installation state and interactive navigation artifact", async () => {
+    const source: PluginManifest = {
+      schemaVersion: 5,
+      pluginId: "example.kanban",
+      packageVersion: "1.0.0",
+      requestedCapabilities: ["plugin.ui.state.mutate"],
+      dependencies: [],
+      runtime: {
+        kind: "dynamic-worker",
+        codeArtifactDigest: `sha256:${"a".repeat(64)}`,
+      },
+      presentation: {title: "Example Kanban", summary: "A persistent task board."},
+      state: {kind: "installation"},
+      uiContributions: [{
+        contributionId: "board",
+        slot: "user-plugin.navigation",
+        title: "Kanban",
+        renderer: {
+          kind: "worker-interactive-document-v1",
+          codeArtifactDigest: `sha256:${"b".repeat(64)}`,
+        },
+      }],
+    };
+
+    const resolver = await BundledPluginManifestResolver.create([source]);
+    const resolved = await resolver.resolve("example.kanban", "1.0.0");
+
+    expect(resolved).toMatchObject({
+      schemaVersion: 5,
+      state: {kind: "installation"},
+      uiContributions: source.uiContributions,
+    });
+    expect(Object.isFrozen(resolved!.state)).toBe(true);
+    expect(Object.isFrozen(resolved!.uiContributions![0].renderer)).toBe(true);
+
+    const changed = await BundledPluginManifestResolver.create([{
+      ...source,
+      uiContributions: [{
+        ...source.uiContributions[0],
+        renderer: {
+          kind: "worker-interactive-document-v1" as const,
+          codeArtifactDigest: `sha256:${"c".repeat(64)}`,
+        },
+      }],
+    }]);
+    expect((await changed.resolve("example.kanban", "1.0.0"))!.manifestDigest)
+      .not.toBe(resolved!.manifestDigest);
+  });
+
+  it("rejects interactive navigation without its exact foreground state capability", async () => {
+    const source: PluginManifest = {
+      schemaVersion: 5,
+      pluginId: "example.kanban-without-grant",
+      packageVersion: "1.0.0",
+      requestedCapabilities: [],
+      dependencies: [],
+      runtime: {kind: "dynamic-worker", codeArtifactDigest: `sha256:${"a".repeat(64)}`},
+      presentation: {title: "Kanban", summary: "Missing capability."},
+      state: {kind: "installation"},
+      uiContributions: [{
+        contributionId: "board",
+        slot: "user-plugin.navigation",
+        title: "Kanban",
+        renderer: {
+          kind: "worker-interactive-document-v1",
+          codeArtifactDigest: `sha256:${"b".repeat(64)}`,
+        },
+      }],
+    };
+
+    await expect(BundledPluginManifestResolver.create([source]))
+      .rejects.toThrow("Interactive UI capability missing");
+  });
+
   it("owns nested schema v4 declarative documents before asynchronous hashing", async () => {
     const items = ["first", "second"];
     const blocks = [{kind: "list" as const, items}];

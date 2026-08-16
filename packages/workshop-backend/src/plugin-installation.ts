@@ -695,6 +695,13 @@ export interface UserPluginUiInstallationSnapshot {
   manifestDigest: string;
 }
 
+/** Exact host-only interactive lifecycle including its opaque state pointer. */
+export interface UserPluginInteractiveInstallationSnapshot extends
+  UserPluginUiInstallationSnapshot {
+  /** Opaque reference resolved only by the trusted owner boundary. */
+  stateRef: string;
+}
+
 /** Returns whether a manifest digest is in canonical content-addressed form. */
 export function isCanonicalPluginManifestDigest(digest: string): boolean {
   return /^sha256:[0-9a-f]{64}$/.test(digest);

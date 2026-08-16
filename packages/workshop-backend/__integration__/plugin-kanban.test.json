@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 5,
+  "pluginId": "test.kanban",
+  "packageVersion": "1.0.0",
+  "requestedCapabilities": ["plugin.ui.state.mutate"],
+  "dependencies": [],
+  "runtime": {
+    "kind": "dynamic-worker",
+    "codeArtifactDigest": "sha256:a09a00ded0a96c15c3ce05a974ed5dfde6291574bb3666ac602bd2d0d1686e74"
+  },
+  "presentation": {
+    "title": "Test Kanban",
+    "summary": "Exercises persistent interactive navigation."
+  },
+  "state": {"kind": "installation"},
+  "uiContributions": [
+    {
+      "contributionId": "board",
+      "slot": "user-plugin.navigation",
+      "title": "Kanban",
+      "renderer": {
+        "kind": "worker-interactive-document-v1",
+        "codeArtifactDigest": "sha256:0bd17cb87c17c2ab8683685380cfb907f2df97f18d23b7bcc42784fb4a6d82d1"
+      }
+    }
+  ]
+}

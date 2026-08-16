@@ -9,6 +9,8 @@ interface PluginManifestBase {
   readonly requestedCapabilities: readonly string[];
 }
 
+const PLUGIN_UI_STATE_MUTATE_CAPABILITY = "plugin.ui.state.mutate";
+
 const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
 
 /** Original declarative plugin manifest without package dependencies. */
@@ -75,7 +77,28 @@ export type PluginUiContributionDescriptor = {
     readonly codeArtifactDigest: string;
     readonly height: number;
   };
+} | {
+  /** Stable contribution identifier within one manifest. */
+  readonly contributionId: string;
+
+  /** Host-owned navigation placement; manifests cannot choose a URL. */
+  readonly slot: "user-plugin.navigation";
+
+  /** Human-readable navigation and page title. */
+  readonly title: string;
+
+  /** Pure state reducer and closed document renderer executed in a Dynamic Worker. */
+  readonly renderer: {
+    readonly kind: "worker-interactive-document-v1";
+    readonly codeArtifactDigest: string;
+  };
 };
+
+/** Installation-lifetime state ownership declared independently from runtime capabilities. */
+export interface PluginStateDescriptor {
+  /** One isolated state object follows one installation until detach and explicit purge. */
+  readonly kind: "installation";
+}
 
 /** Declarative plugin manifest that can produce an isolated runtime candidate. */
 export interface PluginManifestV3 extends PluginManifestBase {
@@ -107,14 +130,35 @@ export interface PluginManifestV4 extends PluginManifestBase {
   readonly uiContributions: readonly PluginUiContributionDescriptor[];
 }
 
+/** Interactive user plugin manifest with installation-owned state and navigation contributions. */
+export interface PluginManifestV5 extends PluginManifestBase {
+  /** Schema version for interactive user packages. */
+  readonly schemaVersion: 5;
+
+  /** Packages that must already be active before this package can activate. */
+  readonly dependencies: readonly string[];
+
+  /** Immutable runtime artifact selected by this exact package version. */
+  readonly runtime: PluginRuntimeDescriptor;
+
+  /** Safe package presentation metadata. */
+  readonly presentation: PluginPresentation;
+
+  /** Installation-scoped state ownership selected by the trusted host. */
+  readonly state: PluginStateDescriptor;
+
+  /** Digest-bound details and navigation contributions. */
+  readonly uiContributions: readonly PluginUiContributionDescriptor[];
+}
+
 /** Declarative plugin manifest before its immutable bytes and digest are verified. */
 export type PluginManifest =
-  PluginManifestV1 | PluginManifestV2 | PluginManifestV3 | PluginManifestV4;
+  PluginManifestV1 | PluginManifestV2 | PluginManifestV3 | PluginManifestV4 | PluginManifestV5;
 
 /** An owned immutable plugin manifest with a digest verified by its registry adapter. */
 export interface VerifiedPluginManifest extends PluginManifestBase {
   /** Schema version of the canonical source document. */
-  readonly schemaVersion: 1 | 2 | 3 | 4;
+  readonly schemaVersion: 1 | 2 | 3 | 4 | 5;
 
   /** Canonical dependency set; schema v1 manifests resolve to an empty set. */
   readonly dependencies: readonly string[];
@@ -127,6 +171,9 @@ export interface VerifiedPluginManifest extends PluginManifestBase {
 
   /** Verified owned UI contributions for schema v4 packages. */
   readonly uiContributions?: readonly PluginUiContributionDescriptor[];
+
+  /** Verified state ownership for schema v5 packages. */
+  readonly state?: PluginStateDescriptor;
 
   /** SHA-256 digest of the canonical manifest bytes. */
   readonly manifestDigest: string;
@@ -142,6 +189,11 @@ export interface PluginManifestResolver {
 export interface PluginManifestCatalog extends PluginManifestResolver {
   /** Returns immutable verified entries in registry order. */
   list(): Promise<readonly VerifiedPluginManifest[]>;
+}
+
+/** Returns whether a verified manifest declares installation state owned only by UserDO. */
+export function isUserOnlyPluginManifest(manifest: VerifiedPluginManifest): boolean {
+  return manifest.schemaVersion === 5 && manifest.state?.kind === "installation";
 }
 
 /** Manifest resolver backed by the immutable entries bundled into one deployment. */
@@ -193,7 +245,7 @@ async function verifyPluginManifest(manifest: PluginManifest): Promise<VerifiedP
     );
   }
   if (
-    (manifest.schemaVersion === 3 || manifest.schemaVersion === 4) &&
+    (manifest.schemaVersion === 3 || manifest.schemaVersion === 4 || manifest.schemaVersion === 5) &&
     (manifest.runtime.kind !== "dynamic-worker" ||
       !/^sha256:[0-9a-f]{64}$/.test(manifest.runtime.codeArtifactDigest) ||
       Object.keys(manifest.runtime).some(
@@ -204,11 +256,39 @@ async function verifyPluginManifest(manifest: PluginManifest): Promise<VerifiedP
       `Invalid runtime descriptor in ${manifest.pluginId}@${manifest.packageVersion}`,
     );
   }
-  if (manifest.schemaVersion === 4) {
+  if (manifest.schemaVersion === 4 || manifest.schemaVersion === 5) {
     if (!isValidPresentation(manifest.presentation)) {
       throw new TypeError(`Invalid presentation in ${manifest.pluginId}@${manifest.packageVersion}`);
     }
     if (!isValidUiContributions(manifest.uiContributions)) {
+      throw new TypeError(
+        `Invalid UI contributions in ${manifest.pluginId}@${manifest.packageVersion}`,
+      );
+    }
+    if (
+      manifest.schemaVersion === 5 && (
+        typeof manifest.state !== "object" || manifest.state === null ||
+        Array.isArray(manifest.state) || manifest.state.kind !== "installation" ||
+        !hasOnlyKeys(manifest.state, ["kind"])
+      )
+    ) {
+      throw new TypeError(`Invalid state descriptor in ${manifest.pluginId}@${manifest.packageVersion}`);
+    }
+    if (
+      manifest.schemaVersion === 5 &&
+      manifest.uiContributions.some(contribution =>
+        contribution.slot === "user-plugin.navigation" &&
+        contribution.renderer.kind === "worker-interactive-document-v1") &&
+      !manifest.requestedCapabilities.includes(PLUGIN_UI_STATE_MUTATE_CAPABILITY)
+    ) {
+      throw new TypeError(
+        `Interactive UI capability missing in ${manifest.pluginId}@${manifest.packageVersion}`,
+      );
+    }
+    if (
+      manifest.schemaVersion === 4 &&
+      manifest.uiContributions.some(contribution => contribution.slot !== "user-plugin.details")
+    ) {
       throw new TypeError(
         `Invalid UI contributions in ${manifest.pluginId}@${manifest.packageVersion}`,
       );
@@ -237,7 +317,7 @@ async function verifyPluginManifest(manifest: PluginManifest): Promise<VerifiedP
         kind: "dynamic-worker",
         codeArtifactDigest: manifest.runtime.codeArtifactDigest,
       }),
-    }) : Object.freeze({
+    }) : manifest.schemaVersion === 4 ? Object.freeze({
       schemaVersion: 4,
       pluginId: manifest.pluginId,
       packageVersion: manifest.packageVersion,
@@ -252,6 +332,22 @@ async function verifyPluginManifest(manifest: PluginManifest): Promise<VerifiedP
         summary: manifest.presentation.summary,
       }),
       uiContributions: snapshotUiContributions(manifest.uiContributions),
+    }) : Object.freeze({
+      schemaVersion: 5,
+      pluginId: manifest.pluginId,
+      packageVersion: manifest.packageVersion,
+      requestedCapabilities: Object.freeze([...manifest.requestedCapabilities]),
+      dependencies: Object.freeze([...manifest.dependencies].toSorted()),
+      runtime: Object.freeze({
+        kind: "dynamic-worker",
+        codeArtifactDigest: manifest.runtime.codeArtifactDigest,
+      }),
+      presentation: Object.freeze({
+        title: manifest.presentation.title,
+        summary: manifest.presentation.summary,
+      }),
+      state: Object.freeze({kind: "installation" as const}),
+      uiContributions: snapshotUiContributions(manifest.uiContributions),
     });
   const canonical = JSON.stringify(snapshot);
   const canonicalBytes = new TextEncoder().encode(canonical);
@@ -264,13 +360,14 @@ async function verifyPluginManifest(manifest: PluginManifest): Promise<VerifiedP
   return Object.freeze({
     ...snapshot,
     dependencies: Object.freeze(snapshot.schemaVersion === 1 ? [] : [...snapshot.dependencies]),
-    ...(snapshot.schemaVersion === 3 || snapshot.schemaVersion === 4
+    ...(snapshot.schemaVersion === 3 || snapshot.schemaVersion === 4 || snapshot.schemaVersion === 5
       ? {runtime: snapshot.runtime}
       : {}),
-    ...(snapshot.schemaVersion === 4 ? {
+    ...(snapshot.schemaVersion === 4 || snapshot.schemaVersion === 5 ? {
       presentation: snapshot.presentation,
       uiContributions: snapshot.uiContributions,
     } : {}),
+    ...(snapshot.schemaVersion === 5 ? {state: snapshot.state} : {}),
     manifestDigest: `sha256:${new Uint8Array(digest).toHex()}`,
   });
 }
@@ -343,23 +440,32 @@ function isValidUiContributions(
     const id = Reflect.get(contribution, "contributionId");
     if (
       typeof id !== "string" || !UI_CONTRIBUTION_ID.test(id) || ids.has(id) ||
-      Reflect.get(contribution, "slot") !== "user-plugin.details" ||
       !isBoundedText(Reflect.get(contribution, "title"), 80)
     ) return false;
     ids.add(id);
     const renderer = Reflect.get(contribution, "renderer");
     if (typeof renderer !== "object" || renderer === null || Array.isArray(renderer)) return false;
+    const slot = Reflect.get(contribution, "slot");
+    if (slot !== "user-plugin.details" && slot !== "user-plugin.navigation") return false;
     if (Reflect.get(renderer, "kind") === "host-schema-v1") {
       if (
+        slot !== "user-plugin.details" ||
         !hasOnlyKeys(renderer, ["kind", "document"]) ||
         !isValidDeclarativeDocument(Reflect.get(renderer, "document"))
       ) return false;
     } else if (Reflect.get(renderer, "kind") === "worker-rendered-document-v1") {
       const height = Reflect.get(renderer, "height");
       if (
+        slot !== "user-plugin.details" ||
         !hasOnlyKeys(renderer, ["kind", "codeArtifactDigest", "height"]) ||
         !/^sha256:[0-9a-f]{64}$/.test(Reflect.get(renderer, "codeArtifactDigest")) ||
         !Number.isInteger(height) || height < 120 || height > 800
+      ) return false;
+    } else if (Reflect.get(renderer, "kind") === "worker-interactive-document-v1") {
+      if (
+        slot !== "user-plugin.navigation" ||
+        !hasOnlyKeys(renderer, ["kind", "codeArtifactDigest"]) ||
+        !/^sha256:[0-9a-f]{64}$/.test(Reflect.get(renderer, "codeArtifactDigest"))
       ) return false;
     } else {
       return false;
@@ -404,6 +510,17 @@ function snapshotUiContributions(
           renderer: Object.freeze({
         kind: "host-schema-v1" as const,
         document: snapshotDeclarativeDocument(contribution.renderer.document),
+          }),
+        });
+      }
+      if (contribution.renderer.kind === "worker-interactive-document-v1") {
+        return Object.freeze({
+          contributionId: contribution.contributionId,
+          slot: "user-plugin.navigation" as const,
+          title: contribution.title,
+          renderer: Object.freeze({
+            kind: "worker-interactive-document-v1" as const,
+            codeArtifactDigest: contribution.renderer.codeArtifactDigest,
           }),
         });
       }

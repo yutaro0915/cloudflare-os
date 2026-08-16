@@ -7,6 +7,8 @@ import { CloudflareGatekeeperUser } from "@gadgets/workshop-shared/cloudflare-ga
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { createTypedStorage, collection } from "@gadgets/typed-storage";
 import { createWorkshopLogger } from "./observability";
+import { PLUGIN_UI_STATE_MUTATE_CAPABILITY } from "./plugin-runtime-capabilities.js";
+import { KeyedSerialQueue } from "./keyed-serial-queue.js";
 import { getAiGatewayConfig } from "./ai-gateway.js";
 import { utcDayKey, nextUtcMidnightIso, DailyQuotaResult } from "./ai-gateway-billing/limits/config.js";
 import type { AdminSettings } from "./admin-settings.js";
@@ -35,6 +37,7 @@ import {
   type FinalizeUserPluginStatePurgeResult,
   type UserPluginCenterOwnerSnapshot,
   type UserPluginUiInstallationSnapshot,
+  type UserPluginInteractiveInstallationSnapshot,
 } from "./plugin-installation.js";
 
 const logger = createWorkshopLogger("workshop.user");
@@ -75,6 +78,10 @@ export type ProvidedAccountInfo = {
 // usable directly, the way the runtime stub actually behaves.
 type AccountCreatorStub = Required<Pick<GatekeeperVendor, "createAccount">>;
 type SingletonAccountStub = Required<Pick<GatekeeperUser, "getSingletonGatekeeperClass" | "startAppUi">>;
+type InteractivePluginStateStub = Pick<
+  DurableObjectStub<import("./plugin-state.js").PluginStateDurableObject>,
+  "readVersioned" | "compareAndSetForHost"
+>;
 
 function areCredentialsValid(record: ConnectedAccountRecord): boolean {
   if (record.credentialsExpired) return false;
@@ -349,6 +356,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   private storage: UserStorage;
   private vendors: Map<string, Service<GatekeeperVendor>>;
   private adminSettings: DurableObjectNamespace<AdminSettings>;
+  readonly #pluginLifecycle = new KeyedSerialQueue();
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
@@ -366,6 +374,10 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     this.adminSettings = this.ctx.exports.AdminSettings;
 
     this.vendors = buildGatekeeperVendorMap(env);
+  }
+
+  async #withPluginLifecycle<T>(pluginId: string, operation: () => Promise<T> | T): Promise<T> {
+    return this.#pluginLifecycle.run(pluginId, operation);
   }
 
   #migrateAgentDefinitions(): void {
@@ -718,7 +730,18 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
 
   /** Persists resolved plugin desired state received through the trusted backend boundary. */
   async putUserPluginInstallation(
-      input: PluginInstallationInput): Promise<PutUserPluginInstallationResult> {
+      input: PluginInstallationInput & {
+        /** Trusted manifest-derived ownership request; it is never persisted from browser input. */
+        stateRequirement?: "none" | "installation";
+      }): Promise<PutUserPluginInstallationResult> {
+    return this.#withPluginLifecycle(input.pluginId, () =>
+      this.#putUserPluginInstallation(input));
+  }
+
+  #putUserPluginInstallation(
+      input: PluginInstallationInput & {
+        stateRequirement?: "none" | "installation";
+      }): PutUserPluginInstallationResult {
     if (!isCanonicalPluginManifestDigest(input.manifestDigest)) {
       return {ok: false, error: "INVALID_MANIFEST_DIGEST"};
     }
@@ -731,7 +754,8 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       ) return;
       const acceptedInstallationId = existing?.installationId ?? input.installationId;
       const stateRef = existing?.stateRef ?? (
-        input.grantedCapabilities.includes("plugin.state.read")
+        (input.stateRequirement === "installation" ||
+          input.grantedCapabilities.includes("plugin.state.read"))
           ? this.ctx.exports.PluginStateDurableObject.getByName(JSON.stringify([
             "plugin-state-v1",
             "user",
@@ -780,7 +804,14 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   /** Persists the permanent revocation marker that linearizes a user uninstall. */
-  beginUserPluginUninstall(
+  async beginUserPluginUninstall(
+      pluginId: string,
+      expectedInstallationId: string): Promise<BeginUserPluginUninstallResult> {
+    return this.#withPluginLifecycle(pluginId, () =>
+      this.#beginUserPluginUninstall(pluginId, expectedInstallationId));
+  }
+
+  #beginUserPluginUninstall(
       pluginId: string,
       expectedInstallationId: string): BeginUserPluginUninstallResult {
     let result: BeginUserPluginUninstallResult = {ok: false, error: "PLUGIN_NOT_INSTALLED"};
@@ -929,6 +960,83 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       packageVersion: installation.packageVersion,
       manifestDigest: installation.manifestDigest,
     };
+  }
+
+  /** Resolves one exact non-revoked stateful lifecycle for a foreground plugin UI action. */
+  readUserPluginInteractiveInstallationForHost(
+      pluginId: string,
+      expectedInstallationId: string): UserPluginInteractiveInstallationSnapshot | null {
+    const installation = this.storage.pluginInstallations.get(pluginId);
+    if (
+      installation === undefined || installation.installationId !== expectedInstallationId ||
+      !installation.enabled || installation.stateRef === undefined ||
+      !installation.grantedCapabilities.includes(PLUGIN_UI_STATE_MUTATE_CAPABILITY) ||
+      this.storage.pluginRevocations.get(installation.installationId) !== undefined
+    ) return null;
+    return {
+      installationId: installation.installationId,
+      pluginId: installation.pluginId,
+      packageVersion: installation.packageVersion,
+      manifestDigest: installation.manifestDigest,
+      stateRef: installation.stateRef,
+    };
+  }
+
+  /** Reads one host-selected state cell only while the exact interactive lifecycle is current. */
+  async readUserPluginInteractiveStateForHost(
+      pluginId: string,
+      installationId: string,
+      key: string): Promise<unknown> {
+    const installation = this.storage.pluginInstallations.get(pluginId);
+    if (
+      installation === undefined || installation.installationId !== installationId ||
+      !installation.enabled || installation.stateRef === undefined ||
+      !installation.grantedCapabilities.includes(PLUGIN_UI_STATE_MUTATE_CAPABILITY) ||
+      this.storage.pluginRevocations.get(installation.installationId) !== undefined
+    ) return null;
+    const states = this.ctx.exports.PluginStateDurableObject;
+    const state: InteractivePluginStateStub = states.get(states.idFromString(installation.stateRef));
+    return state.readVersioned({
+      scope: "user",
+      targetId: this.ctx.id.toString(),
+      pluginId,
+      installationId,
+    }, key);
+  }
+
+  /** Commits one exact foreground interactive mutation without exposing its state pointer. */
+  async compareAndSetUserPluginInteractiveStateForHost(
+      expected: UserPluginInteractiveInstallationSnapshot,
+      key: string,
+      expectedRevision: number,
+      nextValue: unknown,
+      mutationId: string): Promise<
+        {ok: true; revision: number; replayed: boolean} |
+        {ok: false; currentRevision: number} |
+        null
+      > {
+    return this.#withPluginLifecycle(expected.pluginId, async () => {
+      const installation = this.storage.pluginInstallations.get(expected.pluginId);
+      if (
+        installation === undefined ||
+        installation.installationId !== expected.installationId ||
+        installation.packageVersion !== expected.packageVersion ||
+        installation.manifestDigest !== expected.manifestDigest ||
+        installation.stateRef !== expected.stateRef ||
+        !installation.enabled || installation.stateRef === undefined ||
+        !installation.grantedCapabilities.includes(PLUGIN_UI_STATE_MUTATE_CAPABILITY) ||
+        this.storage.pluginRevocations.get(installation.installationId) !== undefined
+      ) return null;
+      const states = this.ctx.exports.PluginStateDurableObject;
+      const state: InteractivePluginStateStub =
+        states.get(states.idFromString(installation.stateRef));
+      return state.compareAndSetForHost({
+        scope: "user",
+        targetId: this.ctx.id.toString(),
+        pluginId: expected.pluginId,
+        installationId: expected.installationId,
+      }, key, expectedRevision, nextValue, mutationId);
+    });
   }
 
   /** Persists or resumes the owner-side marker for one exact detached-state purge. */

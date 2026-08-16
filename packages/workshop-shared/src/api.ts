@@ -309,7 +309,8 @@ export type InstallPluginResult = {
   ok: false;
 
   /** Stable reason the authenticated user can correct. */
-  error: "PLUGIN_VERSION_NOT_FOUND" | "CAPABILITY_APPROVAL_MISMATCH";
+  error: "PLUGIN_VERSION_NOT_FOUND" | "CAPABILITY_APPROVAL_MISMATCH" |
+    "PLUGIN_SCOPE_NOT_SUPPORTED";
 };
 
 /** User-scoped install request accepted by `AuthenticatedApi.installUserPlugin()`. */
@@ -581,6 +582,144 @@ export type OpenUserPluginUiFrameResult = {
   error: "PLUGIN_UI_NOT_AVAILABLE";
 };
 
+/** Safe navigation entry derived from one exact current user installation. */
+export interface UserPluginNavigationEntry {
+  /** Stable package identifier used only as a route locator. */
+  pluginId: string;
+
+  /** Exact installation lifecycle used for compare-and-set authorization. */
+  installationId: string;
+
+  /** Stable contribution identifier selected by the verified manifest. */
+  contributionId: string;
+
+  /** Human-readable sidebar and page title. */
+  title: string;
+}
+
+/** Closed action button rendered by the trusted interactive plugin host. */
+export interface UserPluginInteractiveAction {
+  /** Opaque bounded action identifier interpreted only by the isolated reducer. */
+  actionId: string;
+
+  /** Literal button label. */
+  label: string;
+
+  /** Host-selected visual treatment without custom style authority. */
+  tone: "neutral" | "danger";
+}
+
+/** One item in a host-rendered interactive column. */
+export interface UserPluginInteractiveItem {
+  /** Stable item identity used only for React reconciliation and accessible labeling. */
+  itemId: string;
+
+  /** Literal item title. */
+  title: string;
+
+  /** Ordered closed actions offered by the isolated reducer. */
+  actions: UserPluginInteractiveAction[];
+}
+
+/** One column in a host-rendered interactive document. */
+export interface UserPluginInteractiveColumn {
+  /** Stable column identity. */
+  columnId: string;
+
+  /** Literal column title. */
+  title: string;
+
+  /** Ordered bounded items. */
+  items: UserPluginInteractiveItem[];
+}
+
+/** Optional text form whose submitted value is passed to one opaque reducer action. */
+export interface UserPluginInteractiveForm {
+  /** Opaque bounded action identifier interpreted only by the isolated reducer. */
+  actionId: string;
+
+  /** Literal submit button label. */
+  label: string;
+
+  /** Literal text-field placeholder. */
+  placeholder: string;
+
+  /** Host-enforced maximum input length. */
+  maxLength: number;
+}
+
+/** Closed interactive document rendered by trusted React components only. */
+export interface UserPluginInteractiveDocument {
+  /** Schema version understood by the trusted host renderer. */
+  schemaVersion: 1;
+
+  /** Literal page heading. */
+  title: string;
+
+  /** Optional bounded foreground text action. */
+  form: UserPluginInteractiveForm | null;
+
+  /** Ordered columns containing literal items and closed action buttons. */
+  columns: UserPluginInteractiveColumn[];
+}
+
+/** Opens or mutates one exact current interactive contribution. */
+export interface InteractUserPluginSurfaceRequest {
+  /** Stable package identifier of the current user installation. */
+  pluginId: string;
+
+  /** Exact lifecycle observed from the navigation read model. */
+  expectedInstallationId: string;
+
+  /** Exact manifest-owned navigation contribution. */
+  contributionId: string;
+
+  /** Read-only open or one foreground reducer action. */
+  interaction: {
+    /** Opens the current snapshot without writing state. */
+    kind: "open";
+  } | {
+    /** Runs one action and persists its next state with compare-and-set. */
+    kind: "action";
+
+    /** Revision rendered to the user before this action. */
+    expectedRevision: number;
+
+    /** Client-generated idempotency key scoped to this state cell. */
+    mutationId: string;
+
+    /** Opaque action identifier emitted by the current closed document. */
+    actionId: string;
+
+    /** Optional bounded text value supplied by the trusted host form. */
+    input: string | null;
+  };
+}
+
+/** Result of opening or mutating one user plugin interactive surface. */
+export type InteractUserPluginSurfaceResult = {
+  /** The exact lifecycle remains current and the document is safe to render. */
+  ok: true;
+
+  /** Current state revision used by the next foreground action. */
+  revision: number;
+
+  /** Closed host-rendered document containing no executable content. */
+  document: UserPluginInteractiveDocument;
+} | {
+  /** The contribution or lifecycle is unavailable without exposing internal policy. */
+  ok: false;
+
+  /** Stable expected failure. */
+  error: "PLUGIN_UI_NOT_AVAILABLE";
+} | {
+  /** A concurrent action committed first; no mutation was applied. */
+  ok: false;
+
+  /** Stable compare-and-set conflict. */
+  error: "PLUGIN_UI_CONFLICT";
+};
+
 /** Workspace-scoped install result returned by `Overseer.installWorkspacePlugin()`. */
 export type InstallWorkspacePluginResult = InstallPluginResult | {
   /** The build collaborator request was rejected without changing desired state. */
@@ -614,6 +753,14 @@ export interface AuthenticatedApi extends RpcTarget {
   openUserPluginUiFrame(
     request: OpenUserPluginUiFrameRequest,
   ): Promise<OpenUserPluginUiFrameResult>;
+
+  /** Lists current navigation contributions without exposing state or artifact references. */
+  listUserPluginNavigation(): Promise<UserPluginNavigationEntry[]>;
+
+  /** Opens or mutates one exact interactive contribution through a host-owned CAS boundary. */
+  interactUserPluginSurface(
+    request: InteractUserPluginSurfaceRequest,
+  ): Promise<InteractUserPluginSurfaceResult>;
 
   // Set the user's own display name, seen in chats, etc.
   setOwnDisplayName(name: string): Promise<void>;

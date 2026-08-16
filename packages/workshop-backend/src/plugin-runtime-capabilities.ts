@@ -2,10 +2,13 @@
 export const WORKSPACE_METADATA_READ_CAPABILITY = "workspace.metadata.read";
 /** Installation-scoped JSON state read capability. */
 export const PLUGIN_STATE_READ_CAPABILITY = "plugin.state.read";
+/** Foreground host-mediated interactive UI state mutation capability. */
+export const PLUGIN_UI_STATE_MUTATE_CAPABILITY = "plugin.ui.state.mutate";
 
 const SUPPORTED_PLUGIN_RUNTIME_CAPABILITIES = new Set<string>([
   WORKSPACE_METADATA_READ_CAPABILITY,
   PLUGIN_STATE_READ_CAPABILITY,
+  PLUGIN_UI_STATE_MUTATE_CAPABILITY,
 ]);
 
 /** Returns whether the isolated runtime host implements a manifest capability exactly. */

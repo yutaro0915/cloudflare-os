@@ -25,7 +25,8 @@ function manifestKey(pluginId: string, packageVersion: string): string {
 }
 
 function projectContribution(
-    contribution: PluginUiContributionDescriptor): UserPluginUiContribution {
+    contribution: Extract<PluginUiContributionDescriptor, {slot: "user-plugin.details"}>,
+): UserPluginUiContribution {
   if (contribution.renderer.kind === "host-schema-v1") {
     return {
       contributionId: contribution.contributionId,
@@ -59,6 +60,10 @@ function versionOffer(manifest: VerifiedPluginManifest): UserPluginVersionOffer 
     requestedCapabilities: [...manifest.requestedCapabilities].toSorted(compareText),
     dependencies: [...manifest.dependencies].toSorted(compareText),
     contributions: [...(manifest.uiContributions ?? [])]
+      .filter((contribution): contribution is Extract<
+        PluginUiContributionDescriptor,
+        {slot: "user-plugin.details"}
+      > => contribution.slot === "user-plugin.details")
       .toSorted((left, right) => compareText(left.contributionId, right.contributionId))
       .map(projectContribution),
   };
@@ -126,6 +131,10 @@ export function buildUserPluginCenterView(
           : "installed" as const,
         catalogAvailability: matched!.availability,
         contributions: [...(matched!.manifest?.uiContributions ?? [])]
+          .filter((contribution): contribution is Extract<
+            PluginUiContributionDescriptor,
+            {slot: "user-plugin.details"}
+          > => contribution.slot === "user-plugin.details")
           .toSorted((left, right) => compareText(left.contributionId, right.contributionId))
           .map(projectContribution),
       },

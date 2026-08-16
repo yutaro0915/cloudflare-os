@@ -4,10 +4,16 @@ import {describe, expect, it} from "vitest";
 import focusGuideManifest from "../plugin-manifests/circle.focus-guide.json";
 import focusGuideRuntimeSource from "../plugin-manifests/circle.focus-guide.runtime.js?raw";
 import focusGuideUiSource from "../plugin-manifests/circle.focus-guide.ui.js?raw";
+import kanbanManifest from "../plugin-manifests/circle-kanban.json";
+import kanbanUiSource from "../plugin-manifests/circle-kanban-ui.js?raw";
 import {
   DynamicWorkerPluginUiRenderer,
   WorkerLoaderPluginUiWorkerStarter,
 } from "../src/dynamic-worker-plugin-ui-renderer.js";
+import {
+  DynamicWorkerInteractivePluginUi,
+  WorkerLoaderInteractivePluginUiStarter,
+} from "../src/dynamic-worker-interactive-plugin-ui.js";
 import {VerifyingPluginCodeArtifactResolver} from "../src/plugin-code-artifact.js";
 
 const RUNTIME_HARNESS = `
@@ -37,6 +43,55 @@ function disposeRpcValue(value: object): void {
 }
 
 describe("production plugin Store artifact", () => {
+  it("executes the exact reviewed Personal Kanban reducer in a real Dynamic Worker", async () => {
+    const contribution = kanbanManifest.uiContributions.find(entry =>
+      entry.contributionId === "board" &&
+      entry.renderer.kind === "worker-interactive-document-v1");
+    if (contribution?.renderer.kind !== "worker-interactive-document-v1") {
+      throw new Error("Expected the production Personal Kanban interactive contribution.");
+    }
+    const expectedDigest = contribution.renderer.codeArtifactDigest;
+    const artifacts = new VerifyingPluginCodeArtifactResolver({
+      read: async digest => digest === expectedDigest ? kanbanUiSource : null,
+    });
+    const renderer = new DynamicWorkerInteractivePluginUi(
+      new WorkerLoaderInteractivePluginUiStarter(env.LOADER),
+      artifacts,
+    );
+
+    const opened = await renderer.interact(expectedDigest, {kind: "open", state: null});
+    expect(opened?.document).toMatchObject({
+      title: "Personal Kanban",
+      columns: [
+        {columnId: "todo", title: "To do", items: []},
+        {columnId: "doing", title: "Doing", items: []},
+        {columnId: "done", title: "Done", items: []},
+      ],
+    });
+
+    const created = await renderer.interact(expectedDigest, {
+      kind: "action",
+      state: opened?.state ?? null,
+      revision: 0,
+      action: {actionId: "task.create", input: "Ship the Kanban demo"},
+    });
+    const createdItem = created?.document.columns[0]?.items[0];
+    expect(createdItem?.title).toBe("Ship the Kanban demo");
+    const move = createdItem?.actions.find(action => action.label === "Move to Doing");
+    if (move === undefined) throw new Error("Expected the production move action.");
+
+    const moved = await renderer.interact(expectedDigest, {
+      kind: "action",
+      state: created?.state ?? null,
+      revision: 1,
+      action: {actionId: move.actionId, input: null},
+    });
+    expect(moved?.document.columns[1]?.items).toEqual([
+      expect.objectContaining({title: "Ship the Kanban demo"}),
+    ]);
+    expect(moved?.document.columns[0]?.items).toEqual([]);
+  });
+
   it("executes the exact reviewed Focus Guide UI in a real Dynamic Worker", async () => {
     const contribution = focusGuideManifest.uiContributions.find(entry =>
       entry.contributionId === "focus-session" &&

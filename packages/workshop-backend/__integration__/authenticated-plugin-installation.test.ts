@@ -34,6 +34,217 @@ async function createAccount(
 }
 
 describe("authenticated user plugin installation", () => {
+  it("installs a navigation plugin and persists create, move, and delete through its reducer", async () => {
+    using publicApi = await connect();
+    const ownerAccount = await createAccount(publicApi, "pluginkanbanowner");
+    const otherAccount = await createAccount(publicApi, "pluginkanbanother");
+    using authenticated = await publicApi.authenticate(ownerAccount.token);
+    using other = await publicApi.authenticate(otherAccount.token);
+
+    const installed = await authenticated.installUserPlugin({
+      pluginId: "test.kanban",
+      packageVersion: "1.0.0",
+      approvedCapabilities: ["plugin.ui.state.mutate"],
+    });
+    if (!installed.ok) throw new Error("Expected Kanban installation.");
+
+    const navigation = await authenticated.listUserPluginNavigation();
+    expect(navigation).toEqual([{
+      pluginId: "test.kanban",
+      installationId: installed.installationId,
+      contributionId: "board",
+      title: "Kanban",
+    }]);
+    await expect(other.listUserPluginNavigation()).resolves.toEqual([]);
+    await expect(other.interactUserPluginSurface({
+      pluginId: "test.kanban",
+      expectedInstallationId: installed.installationId,
+      contributionId: "board",
+      interaction: {
+        kind: "action",
+        expectedRevision: 0,
+        mutationId: "forged-other-user",
+        actionId: "task.create",
+        input: "Forged",
+      },
+    })).resolves.toEqual({ok: false, error: "PLUGIN_UI_NOT_AVAILABLE"});
+    expect(JSON.stringify(navigation)).not.toMatch(/stateRef|manifestDigest|codeArtifactDigest|sha256:/);
+
+    const opened = await authenticated.interactUserPluginSurface({
+      pluginId: "test.kanban",
+      expectedInstallationId: installed.installationId,
+      contributionId: "board",
+      interaction: {kind: "open"},
+    });
+    expect(opened).toMatchObject({
+      ok: true,
+      revision: 0,
+      document: {
+        title: "Test Kanban",
+        columns: [
+          {columnId: "todo", items: []},
+          {columnId: "doing", items: []},
+          {columnId: "done", items: []},
+        ],
+      },
+    });
+
+    const createRequest = {
+      pluginId: "test.kanban",
+      expectedInstallationId: installed.installationId,
+      contributionId: "board",
+      interaction: {
+        kind: "action" as const,
+        expectedRevision: 0,
+        mutationId: "create-first",
+        actionId: "task.create",
+        input: "Ship the Kanban demo",
+      },
+    };
+    const created = await authenticated.interactUserPluginSurface(createRequest);
+    expect(created).toMatchObject({ok: true, revision: 1});
+    if (!created.ok) throw new Error("Expected task creation.");
+    expect(created.document.columns[0]?.items).toMatchObject([{
+      itemId: "task-1",
+      title: "Ship the Kanban demo",
+    }]);
+    const replayed = await authenticated.interactUserPluginSurface(createRequest);
+    expect(replayed).toMatchObject({ok: true, revision: 1});
+    if (!replayed.ok) throw new Error("Expected idempotent create replay.");
+    expect(replayed.document.columns[0]?.items).toMatchObject([{itemId: "task-1"}]);
+
+    const moved = await authenticated.interactUserPluginSurface({
+      pluginId: "test.kanban",
+      expectedInstallationId: installed.installationId,
+      contributionId: "board",
+      interaction: {
+        kind: "action",
+        expectedRevision: 1,
+        mutationId: "move-first",
+        actionId: "task.move:task-1:doing",
+        input: null,
+      },
+    });
+    expect(moved).toMatchObject({
+      ok: true,
+      revision: 2,
+      document: {columns: [{items: []}, {items: [{itemId: "task-1"}]}, {items: []}]},
+    });
+    await expect(authenticated.interactUserPluginSurface({
+      pluginId: "test.kanban",
+      expectedInstallationId: installed.installationId,
+      contributionId: "board",
+      interaction: {
+        kind: "action",
+        expectedRevision: 0,
+        mutationId: "stale-delete",
+        actionId: "task.delete:task-1",
+        input: null,
+      },
+    })).resolves.toEqual({ok: false, error: "PLUGIN_UI_CONFLICT"});
+
+    await abortAllDurableObjects();
+    using reconstructed = await publicApi.authenticate(ownerAccount.token);
+    await expect(reconstructed.interactUserPluginSurface({
+      pluginId: "test.kanban",
+      expectedInstallationId: installed.installationId,
+      contributionId: "board",
+      interaction: {kind: "open"},
+    })).resolves.toMatchObject({
+      ok: true,
+      revision: 2,
+      document: {columns: [{items: []}, {items: [{itemId: "task-1"}]}, {items: []}]},
+    });
+
+    await expect(reconstructed.interactUserPluginSurface({
+      pluginId: "test.kanban",
+      expectedInstallationId: installed.installationId,
+      contributionId: "board",
+      interaction: {
+        kind: "action",
+        expectedRevision: 2,
+        mutationId: "delete-first",
+        actionId: "task.delete:task-1",
+        input: null,
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      revision: 3,
+      document: {columns: [{items: []}, {items: []}, {items: []}]},
+    });
+
+    const owner = exports.UserDurableObject.getByName(ownerAccount.username);
+    const [persisted] = await owner.listUserPluginInstallations();
+    if (persisted?.stateRef === undefined) throw new Error("Expected Kanban stateRef.");
+    await owner.putUserPluginInstallation({
+      installationId: persisted.installationId,
+      pluginId: persisted.pluginId,
+      packageVersion: persisted.packageVersion,
+      manifestDigest: persisted.manifestDigest,
+      enabled: true,
+      grantedCapabilities: [],
+      config: persisted.config,
+      stateRequirement: "installation",
+    });
+    await expect(reconstructed.listUserPluginNavigation()).resolves.toEqual([]);
+    await expect(reconstructed.interactUserPluginSurface({
+      pluginId: "test.kanban",
+      expectedInstallationId: installed.installationId,
+      contributionId: "board",
+      interaction: {
+        kind: "action",
+        expectedRevision: 3,
+        mutationId: "grant-revoked",
+        actionId: "task.create",
+        input: "Must not persist",
+      },
+    })).resolves.toEqual({ok: false, error: "PLUGIN_UI_NOT_AVAILABLE"});
+    const restored = await reconstructed.installUserPlugin({
+      pluginId: "test.kanban",
+      packageVersion: "1.0.0",
+      approvedCapabilities: ["plugin.ui.state.mutate"],
+    });
+    expect(restored).toEqual({ok: true, installationId: installed.installationId});
+    await expect(reconstructed.listUserPluginNavigation()).resolves.toHaveLength(1);
+
+    await expect(reconstructed.uninstallUserPlugin({
+      pluginId: "test.kanban",
+      expectedInstallationId: installed.installationId,
+    })).resolves.toEqual({
+      ok: true,
+      installationId: installed.installationId,
+      retainedState: true,
+    });
+    await expect(reconstructed.listUserPluginNavigation()).resolves.toEqual([]);
+    await expect(reconstructed.interactUserPluginSurface({
+      pluginId: "test.kanban",
+      expectedInstallationId: installed.installationId,
+      contributionId: "board",
+      interaction: {
+        kind: "action",
+        expectedRevision: 3,
+        mutationId: "stale-after-uninstall",
+        actionId: "task.create",
+        input: "Must stay detached",
+      },
+    })).resolves.toEqual({ok: false, error: "PLUGIN_UI_NOT_AVAILABLE"});
+    await expect(reconstructed.listDetachedUserPluginStates()).resolves.toMatchObject([{
+      installationId: installed.installationId,
+      pluginId: "test.kanban",
+    }]);
+    const [detached] = await owner.listDetachedUserPluginStatesForHost();
+    if (detached === undefined) throw new Error("Expected detached Kanban state.");
+    const state = exports.PluginStateDurableObject.get(
+      exports.PluginStateDurableObject.idFromString(detached.stateRef),
+    );
+    await expect(state.readVersioned({
+      scope: "user",
+      targetId: owner.id.toString(),
+      pluginId: detached.pluginId,
+      installationId: detached.installationId,
+    }, "ui:board")).resolves.toMatchObject({revision: 3});
+  });
+
   it("resolves an exact manifest and persists host-derived desired state with audit", async () => {
     using publicApi = await connect();
     const ownerAccount = await createAccount(publicApi, "pluginowner");

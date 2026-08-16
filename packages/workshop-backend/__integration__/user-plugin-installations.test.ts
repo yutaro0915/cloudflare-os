@@ -7,6 +7,135 @@ import type {
 } from "../src/plugin-installation.js";
 
 describe("user plugin installations", () => {
+  it("stores one bounded versioned plugin-state cell with compare-and-set semantics", async () => {
+    const ownerDo = exports.UserDurableObject.getByName("plugin-versioned-state-owner");
+    const state = exports.PluginStateDurableObject.getByName("plugin-versioned-state");
+    const owner = {
+      scope: "user" as const,
+      targetId: ownerDo.id.toString(),
+      pluginId: "example.kanban",
+      installationId: "installation-kanban-v1",
+    };
+
+    await expect(state.readVersioned(owner, "ui:board")).resolves.toEqual({
+      revision: 0,
+      value: null,
+    });
+    await expect(state.compareAndSetForHost(owner, "ui:board", 0, {
+      columns: [{id: "todo", tasks: [{id: "task-1", title: "First"}]}],
+    })).resolves.toEqual({ok: true, revision: 1, replayed: false});
+    await expect(state.compareAndSetForHost(owner, "ui:board", 0, null)).resolves.toEqual({
+      ok: false,
+      currentRevision: 1,
+    });
+
+    await abortAllDurableObjects();
+    const reconstructed = exports.PluginStateDurableObject.getByName("plugin-versioned-state");
+    await expect(reconstructed.readVersioned(owner, "ui:board")).resolves.toEqual({
+      revision: 1,
+      value: {columns: [{id: "todo", tasks: [{id: "task-1", title: "First"}]}]},
+    });
+  });
+
+  it("upgrades a legacy unversioned state cell on its first compare-and-set", async () => {
+    const ownerDo = exports.UserDurableObject.getByName("plugin-legacy-state-owner");
+    const state = exports.PluginStateDurableObject.getByName("plugin-legacy-state");
+    const owner = {
+      scope: "user" as const,
+      targetId: ownerDo.id.toString(),
+      pluginId: "example.legacy",
+      installationId: "installation-legacy",
+    };
+    await runInDurableObject(state, async (_instance, stateContext) => {
+      await stateContext.storage.put("owner", owner);
+      await stateContext.storage.put("values:legacy", {
+        key: "legacy",
+        value: {preserved: true},
+      });
+    });
+
+    await expect(state.readVersioned(owner, "legacy")).resolves.toEqual({
+      revision: 0,
+      value: {preserved: true},
+    });
+    await expect(state.compareAndSetForHost(
+      owner,
+      "legacy",
+      0,
+      {preserved: true, upgraded: true},
+    )).resolves.toEqual({ok: true, revision: 1, replayed: false});
+    await expect(state.readVersioned(owner, "legacy")).resolves.toEqual({
+      revision: 1,
+      value: {preserved: true, upgraded: true},
+    });
+  });
+
+  it("rejects a stale reducer commit after the same installation updates manifests", async () => {
+    const owner = exports.UserDurableObject.getByName("plugin-stale-reducer-owner");
+    const pluginId = "example.interactive-update";
+    const installationId = "installation-interactive-update";
+    await owner.putUserPluginInstallation({
+      installationId,
+      pluginId,
+      packageVersion: "1.0.0",
+      manifestDigest: `sha256:${"a".repeat(64)}`,
+      enabled: true,
+      grantedCapabilities: ["plugin.ui.state.mutate"],
+      config: null,
+      stateRequirement: "installation",
+    });
+    const stale = await owner.readUserPluginInteractiveInstallationForHost(
+      pluginId,
+      installationId,
+    );
+    if (stale === null) throw new Error("Expected the initial interactive lifecycle.");
+    await expect(owner.compareAndSetUserPluginInteractiveStateForHost(
+      stale,
+      "ui:board",
+      0,
+      {source: "v1"},
+      "initial-v1",
+    )).resolves.toEqual({ok: true, revision: 1, replayed: false});
+
+    await owner.putUserPluginInstallation({
+      installationId: "ignored-replacement-id",
+      pluginId,
+      packageVersion: "2.0.0",
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      enabled: true,
+      grantedCapabilities: ["plugin.ui.state.mutate"],
+      config: null,
+      stateRequirement: "installation",
+    });
+    const current = await owner.readUserPluginInteractiveInstallationForHost(
+      pluginId,
+      installationId,
+    );
+    expect(current).toMatchObject({
+      installationId,
+      packageVersion: "2.0.0",
+      manifestDigest: `sha256:${"b".repeat(64)}`,
+      stateRef: stale.stateRef,
+    });
+
+    await expect(owner.compareAndSetUserPluginInteractiveStateForHost(
+      stale,
+      "ui:board",
+      1,
+      {source: "stale-v1"},
+      "late-v1",
+    )).resolves.toBeNull();
+    const state = exports.PluginStateDurableObject.get(
+      exports.PluginStateDurableObject.idFromString(stale.stateRef),
+    );
+    await expect(state.readVersioned({
+      scope: "user",
+      targetId: owner.id.toString(),
+      pluginId,
+      installationId,
+    }, "ui:board")).resolves.toEqual({revision: 1, value: {source: "v1"}});
+  });
+
   it("persists per UserDO across reconstruction without cross-DO storage leakage", async () => {
     let owner = exports.UserDurableObject.getByName("plugin-installation-owner");
     let otherUser = exports.UserDurableObject.getByName("plugin-installation-other-user");

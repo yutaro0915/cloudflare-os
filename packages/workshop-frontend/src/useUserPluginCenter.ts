@@ -11,6 +11,7 @@ import type {
   UninstallUserPluginResult,
   UserPluginCenterView,
 } from '@gadgets/workshop-shared/api'
+import { refreshUserPluginNavigation } from './useUserPluginNavigation'
 
 /** Narrow remote interface owned by the Plugin Center controller. */
 export type UserPluginCenterApi = Pick<AuthenticatedApi,
@@ -96,7 +97,10 @@ export function useUserPluginCenter(api: UserPluginCenterApi): UserPluginCenterC
     setError(null)
     try {
       const result = await api.installUserPlugin(request)
-      if (result.ok) await refresh()
+      if (result.ok) {
+        refreshUserPluginNavigation(api)
+        await refresh()
+      }
       return result
     } catch (caught) {
       if (mounted.current) setError(messageFor(caught))
@@ -111,7 +115,10 @@ export function useUserPluginCenter(api: UserPluginCenterApi): UserPluginCenterC
     setError(null)
     try {
       const result = await api.uninstallUserPlugin(request)
-      if (result.ok) await refresh()
+      if (result.ok) {
+        refreshUserPluginNavigation(api)
+        await refresh()
+      }
       return result
     } catch (caught) {
       if (mounted.current) setError(messageFor(caught))

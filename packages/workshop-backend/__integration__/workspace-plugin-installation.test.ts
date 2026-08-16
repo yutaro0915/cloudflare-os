@@ -32,6 +32,30 @@ async function createAccount(
 }
 
 describe("workspace plugin installations", () => {
+  it("rejects a user-navigation plugin before workspace desired state changes", async () => {
+    using publicApi = await connect();
+    const owner = await createAccount(publicApi, "workspacekanbanscope");
+    using authenticated = await publicApi.authenticate(owner.token);
+    using workspace = await authenticated.newGadget();
+
+    await expect(workspace.installWorkspacePlugin({
+      pluginId: "test.kanban",
+      packageVersion: "1.0.0",
+      approvedCapabilities: ["plugin.ui.state.mutate"],
+    })).resolves.toEqual({ok: false, error: "PLUGIN_SCOPE_NOT_SUPPORTED"});
+    await expect(workspace.installWorkspacePlugin({
+      pluginId: "test.state-only",
+      packageVersion: "1.0.0",
+      approvedCapabilities: [],
+    })).resolves.toEqual({ok: false, error: "PLUGIN_SCOPE_NOT_SUPPORTED"});
+    const workspaceId = (await workspace.getMetadata()).id;
+    const host = exports.OverseerDurableObject.get(
+      exports.OverseerDurableObject.idFromString(workspaceId),
+    );
+    await expect(host.listWorkspacePluginInstallationsForHost()).resolves.toEqual([]);
+    await expect(host.listWorkspacePluginAuditEventsForHost()).resolves.toEqual([]);
+  });
+
   it("persists owner-approved desired state and audit in only the owning workspace", async () => {
     let ownerUsername = "";
     let workspaceId = "";

@@ -5,7 +5,19 @@ import { decodePluginConfigurationValue } from "./plugin-installation.js";
 
 interface PluginStateValue {
   key: string;
+  revision?: number;
   value: PluginConfigurationValue;
+  recentMutationIds?: string[];
+}
+
+const MAX_PLUGIN_STATE_VALUE_BYTES = 64 * 1024;
+
+function decodePluginStateValue(value: unknown): PluginConfigurationValue {
+  const decoded = decodePluginConfigurationValue(value);
+  if (new TextEncoder().encode(JSON.stringify(decoded)).byteLength > MAX_PLUGIN_STATE_VALUE_BYTES) {
+    throw new RangeError("Plugin state value exceeds the size limit.");
+  }
+  return decoded;
 }
 
 function makePluginStateStorage(storage: DurableObjectStorage) {
@@ -43,12 +55,75 @@ export class PluginStateDurableObject extends DurableObject<Cloudflare.Env> {
     return value === undefined ? null : structuredClone(value.value);
   }
 
+  /** Reads one owned state cell and its monotonically increasing compare-and-set revision. */
+  readVersioned(owner: PluginStateOwner, key: string): unknown {
+    if (key.length === 0 || key.length > 128) throw new RangeError("Invalid plugin state key.");
+    this.#assertOwner(owner);
+    if (this.#storage.purged.get()) throw new Error("Plugin state was purged.");
+    const current = this.#storage.values.get(key);
+    return current === undefined
+      ? {revision: 0, value: null}
+      : {revision: current.revision ?? 0, value: structuredClone(current.value)};
+  }
+
+  /** Atomically replaces one host-selected state cell only when the caller observed its revision. */
+  compareAndSetForHost(
+      owner: PluginStateOwner,
+      key: string,
+      expectedRevision: number,
+      nextValue: unknown,
+      mutationId?: string,
+  ): {ok: true; revision: number; replayed: boolean} |
+    {ok: false; currentRevision: number} {
+    if (key.length === 0 || key.length > 128) throw new RangeError("Invalid plugin state key.");
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+      throw new RangeError("Invalid plugin state revision.");
+    }
+    if (
+      mutationId !== undefined &&
+      (mutationId.length === 0 || mutationId.length > 128)
+    ) throw new RangeError("Invalid plugin state mutation ID.");
+    const decoded = decodePluginStateValue(nextValue);
+    let result: {ok: true; revision: number; replayed: boolean} |
+      {ok: false; currentRevision: number} = {
+      ok: false,
+      currentRevision: 0,
+    };
+    this.ctx.storage.transactionSync(() => {
+      this.#assertOwner(owner);
+      if (this.#storage.purged.get()) throw new Error("Plugin state was purged.");
+      const current = this.#storage.values.get(key);
+      const currentRevision = current?.revision ?? 0;
+      if (mutationId !== undefined && current?.recentMutationIds?.includes(mutationId)) {
+        result = {ok: true, revision: currentRevision, replayed: true};
+        return;
+      }
+      if (currentRevision !== expectedRevision) {
+        result = {ok: false, currentRevision};
+        return;
+      }
+      const revision = currentRevision + 1;
+      const recentMutationIds = mutationId === undefined
+        ? current?.recentMutationIds ?? []
+        : [...(current?.recentMutationIds ?? []), mutationId].slice(-32);
+      this.#storage.values.put({key, revision, value: decoded, recentMutationIds});
+      result = {ok: true, revision, replayed: false};
+    });
+    return result;
+  }
+
   /** Seeds bounded state only for trusted host tests and future host-owned migration tooling. */
   putForHost(owner: PluginStateOwner, key: string, value: unknown): void {
     if (key.length === 0 || key.length > 128) throw new RangeError("Invalid plugin state key.");
     this.#assertOwner(owner);
     if (this.#storage.purged.get()) throw new Error("Plugin state was purged.");
-    this.#storage.values.put({key, value: decodePluginConfigurationValue(value)});
+    const current = this.#storage.values.get(key);
+    this.#storage.values.put({
+      key,
+      revision: (current?.revision ?? 0) + 1,
+      value: decodePluginStateValue(value),
+      recentMutationIds: current?.recentMutationIds ?? [],
+    });
   }
 
   /** Permanently erases values while retaining immutable owner and purged tombstones. */

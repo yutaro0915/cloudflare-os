@@ -1,7 +1,7 @@
 import { RpcStub, RpcTarget, newWorkersRpcResponse } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import type { JWTPayload } from "jose";
-import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult, type MyBugReportsResult, type InstallUserPluginRequest, type InstallUserPluginResult, type UninstallUserPluginRequest, type UninstallUserPluginResult, type DetachedUserPluginStateSummary, type PurgeUserPluginStateRequest, type PurgeUserPluginStateResult, type UserPluginCenterView, type OpenUserPluginUiFrameRequest, type OpenUserPluginUiFrameResult } from '@gadgets/workshop-shared/api';
+import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult, type MyBugReportsResult, type InstallUserPluginRequest, type InstallUserPluginResult, type UninstallUserPluginRequest, type UninstallUserPluginResult, type DetachedUserPluginStateSummary, type PurgeUserPluginStateRequest, type PurgeUserPluginStateResult, type UserPluginCenterView, type OpenUserPluginUiFrameRequest, type OpenUserPluginUiFrameResult, type UserPluginNavigationEntry, type InteractUserPluginSurfaceRequest, type InteractUserPluginSurfaceResult } from '@gadgets/workshop-shared/api';
 import { submitBugReportFlow, refreshBugReportStatuses, bugReportIssueUrl,
          BUG_REPORT_STATUS_CACHE_MS } from "./bug-report.js";
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
@@ -38,6 +38,7 @@ import { serveSiteLogo, SITE_LOGO_PATH } from "./site-logo.js";
 import { createWorkshopLogger } from "./observability";
 import type { PluginManifestCatalog } from "./plugin-manifest-registry.js";
 import {
+  decodePluginConfigurationValue,
   resolveApprovedPluginManifest,
 } from "./plugin-installation.js";
 import { bundledPluginManifestResolver } from "./bundled-plugin-manifests.js";
@@ -49,6 +50,14 @@ import {
   DynamicWorkerPluginUiRenderer,
   WorkerLoaderPluginUiWorkerStarter,
 } from "./dynamic-worker-plugin-ui-renderer.js";
+import {
+  DynamicWorkerInteractivePluginUi,
+  WorkerLoaderInteractivePluginUiStarter,
+} from "./dynamic-worker-interactive-plugin-ui.js";
+import {
+  buildUserPluginNavigation,
+  interactUserPluginSurface,
+} from "./user-plugin-interactive-surface.js";
 
 const logger = createWorkshopLogger("workshop.server");
 
@@ -153,6 +162,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       enabled: true,
       grantedCapabilities: [...manifest.requestedCapabilities],
       config: null,
+      stateRequirement: manifest.state?.kind ?? "none",
     });
     if (!result.ok) {
       throw new Error("Verified plugin manifest was rejected by UserDurableObject.");
@@ -203,6 +213,59 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       isManifestDenied: manifestDigest =>
         adminSettings.isPluginManifestDeniedForRuntimeHost(manifestDigest),
       renderArtifact: codeArtifactDigest => renderer.render(codeArtifactDigest),
+    });
+  }
+  async listUserPluginNavigation(): Promise<UserPluginNavigationEntry[]> {
+    const [catalog, owner] = await Promise.all([
+      this.pluginManifests,
+      this.user.readUserPluginCenterOwnerSnapshotForHost(),
+    ]);
+    const manifests = await catalog.list();
+    const adminSettings = this.adminSettings.getByName("");
+    return buildUserPluginNavigation(
+      owner,
+      manifests,
+      digest => adminSettings.isPluginManifestDeniedForRuntimeHost(digest),
+    );
+  }
+  async interactUserPluginSurface(
+      request: InteractUserPluginSurfaceRequest): Promise<InteractUserPluginSurfaceResult> {
+    const catalog = await this.pluginManifests;
+    const adminSettings = this.adminSettings.getByName("");
+    const renderer = new DynamicWorkerInteractivePluginUi(
+      new WorkerLoaderInteractivePluginUiStarter(this.env.LOADER),
+      bundledPluginCodeArtifactResolver,
+    );
+    return interactUserPluginSurface(request, {
+      userId: this.user.id.toString(),
+      readInstallation: (pluginId, installationId) =>
+        this.user.readUserPluginInteractiveInstallationForHost(pluginId, installationId),
+      resolveManifest: (pluginId, packageVersion) => catalog.resolve(pluginId, packageVersion),
+      isManifestDenied: digest =>
+        adminSettings.isPluginManifestDeniedForRuntimeHost(digest),
+      readState: async (installation, key) => {
+        const result = await this.user.readUserPluginInteractiveStateForHost(
+          installation.pluginId,
+          installation.installationId,
+          key,
+        );
+        if (typeof result !== "object" || result === null || Array.isArray(result)) return null;
+        const revision = Reflect.get(result, "revision");
+        if (!Number.isSafeInteger(revision) || (revision as number) < 0) return null;
+        return {
+          revision: revision as number,
+          value: decodePluginConfigurationValue(Reflect.get(result, "value")),
+        };
+      },
+      runArtifact: (digest, interaction) => renderer.interact(digest, interaction),
+      compareAndSetState: (installation, key, revision, value, mutationId) =>
+        this.user.compareAndSetUserPluginInteractiveStateForHost(
+          installation,
+          key,
+          revision,
+          value,
+          mutationId,
+        ),
     });
   }
   setOwnDisplayName(name: string): Promise<void> {
