@@ -590,6 +590,9 @@ export interface UserPluginNavigationEntry {
   /** Exact installation lifecycle used for compare-and-set authorization. */
   installationId: string;
 
+  /** Exact package version whose closed interaction contract is rendered. */
+  packageVersion: string;
+
   /** Stable contribution identifier selected by the verified manifest. */
   contributionId: string;
 
@@ -670,6 +673,9 @@ export interface InteractUserPluginSurfaceRequest {
 
   /** Exact lifecycle observed from the navigation read model. */
   expectedInstallationId: string;
+
+  /** Exact package version that defined this foreground interaction. */
+  expectedPackageVersion: string;
 
   /** Exact manifest-owned navigation contribution. */
   contributionId: string;

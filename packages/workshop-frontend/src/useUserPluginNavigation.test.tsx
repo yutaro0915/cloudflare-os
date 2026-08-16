@@ -56,6 +56,7 @@ describe('useUserPluginNavigationModel', () => {
       .mockResolvedValueOnce([{
         pluginId: 'circle.personal-kanban',
         installationId: 'installation-1',
+        packageVersion: '1.0.0',
         contributionId: 'board',
         title: 'Kanban',
       }])

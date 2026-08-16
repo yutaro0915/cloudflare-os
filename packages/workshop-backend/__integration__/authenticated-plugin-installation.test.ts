@@ -52,6 +52,7 @@ describe("authenticated user plugin installation", () => {
     expect(navigation).toEqual([{
       pluginId: "test.kanban",
       installationId: installed.installationId,
+      packageVersion: "1.0.0",
       contributionId: "board",
       title: "Kanban",
     }]);
@@ -59,6 +60,7 @@ describe("authenticated user plugin installation", () => {
     await expect(other.interactUserPluginSurface({
       pluginId: "test.kanban",
       expectedInstallationId: installed.installationId,
+      expectedPackageVersion: "1.0.0",
       contributionId: "board",
       interaction: {
         kind: "action",
@@ -73,6 +75,7 @@ describe("authenticated user plugin installation", () => {
     const opened = await authenticated.interactUserPluginSurface({
       pluginId: "test.kanban",
       expectedInstallationId: installed.installationId,
+      expectedPackageVersion: "1.0.0",
       contributionId: "board",
       interaction: {kind: "open"},
     });
@@ -92,6 +95,7 @@ describe("authenticated user plugin installation", () => {
     const createRequest = {
       pluginId: "test.kanban",
       expectedInstallationId: installed.installationId,
+      expectedPackageVersion: "1.0.0",
       contributionId: "board",
       interaction: {
         kind: "action" as const,
@@ -116,6 +120,7 @@ describe("authenticated user plugin installation", () => {
     const moved = await authenticated.interactUserPluginSurface({
       pluginId: "test.kanban",
       expectedInstallationId: installed.installationId,
+      expectedPackageVersion: "1.0.0",
       contributionId: "board",
       interaction: {
         kind: "action",
@@ -133,6 +138,7 @@ describe("authenticated user plugin installation", () => {
     await expect(authenticated.interactUserPluginSurface({
       pluginId: "test.kanban",
       expectedInstallationId: installed.installationId,
+      expectedPackageVersion: "1.0.0",
       contributionId: "board",
       interaction: {
         kind: "action",
@@ -148,6 +154,7 @@ describe("authenticated user plugin installation", () => {
     await expect(reconstructed.interactUserPluginSurface({
       pluginId: "test.kanban",
       expectedInstallationId: installed.installationId,
+      expectedPackageVersion: "1.0.0",
       contributionId: "board",
       interaction: {kind: "open"},
     })).resolves.toMatchObject({
@@ -159,6 +166,7 @@ describe("authenticated user plugin installation", () => {
     await expect(reconstructed.interactUserPluginSurface({
       pluginId: "test.kanban",
       expectedInstallationId: installed.installationId,
+      expectedPackageVersion: "1.0.0",
       contributionId: "board",
       interaction: {
         kind: "action",
@@ -190,6 +198,7 @@ describe("authenticated user plugin installation", () => {
     await expect(reconstructed.interactUserPluginSurface({
       pluginId: "test.kanban",
       expectedInstallationId: installed.installationId,
+      expectedPackageVersion: "1.0.0",
       contributionId: "board",
       interaction: {
         kind: "action",
@@ -219,6 +228,7 @@ describe("authenticated user plugin installation", () => {
     await expect(reconstructed.interactUserPluginSurface({
       pluginId: "test.kanban",
       expectedInstallationId: installed.installationId,
+      expectedPackageVersion: "1.0.0",
       contributionId: "board",
       interaction: {
         kind: "action",

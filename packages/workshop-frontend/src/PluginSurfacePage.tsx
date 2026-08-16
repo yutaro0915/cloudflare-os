@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import type {
+  InteractUserPluginSurfaceRequest,
   InteractUserPluginSurfaceResult,
   UserPluginInteractiveAction,
   UserPluginInteractiveDocument,
@@ -13,6 +14,15 @@ import { useDocumentTitle } from './useDocumentTitle'
 interface SurfaceSnapshot {
   revision: number
   document: UserPluginInteractiveDocument
+}
+
+type PluginActionRequest = InteractUserPluginSurfaceRequest & {
+  interaction: Extract<InteractUserPluginSurfaceRequest['interaction'], {kind: 'action'}>
+}
+
+interface PendingPluginAction {
+  request: PluginActionRequest
+  clearInputOnSuccess: boolean
 }
 
 /** Generic trusted renderer for one manifest-owned interactive navigation contribution. */
@@ -32,8 +42,12 @@ export function PluginSurfacePage({
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pendingAction, setPendingAction] = useState<PendingPluginAction | null>(null)
   const generation = useRef(0)
   const operationGeneration = useRef(0)
+  const navigationEntry = navigation.entries.find(candidate =>
+    candidate.pluginId === pluginId && candidate.contributionId === contributionId)
+  const navigationPendingWithoutEntry = navigation.loading && navigationEntry === undefined
   useDocumentTitle(snapshot?.document.title ?? entry?.title ?? 'Plugin')
 
   const applyResult = useCallback((result: InteractUserPluginSurfaceResult): boolean => {
@@ -61,6 +75,7 @@ export function PluginSurfacePage({
       const result = await authenticatedApi.interactUserPluginSurface({
         pluginId: currentEntry.pluginId,
         expectedInstallationId: currentEntry.installationId,
+        expectedPackageVersion: currentEntry.packageVersion,
         contributionId: currentEntry.contributionId,
         interaction: {kind: 'open'},
       })
@@ -85,9 +100,8 @@ export function PluginSurfacePage({
     setLoading(true)
     setSnapshot(null)
     setError(null)
-    if (navigation.loading) return () => { generation.current += 1 }
-    const current = navigation.entries.find(candidate =>
-      candidate.pluginId === pluginId && candidate.contributionId === contributionId) ?? null
+    if (navigationPendingWithoutEntry) return () => { generation.current += 1 }
+    const current = navigationEntry ?? null
     setEntry(current)
     if (current === null) {
       setError('This plugin is not installed or is no longer available.')
@@ -98,17 +112,77 @@ export function PluginSurfacePage({
       if (generation.current === requestGeneration) setLoading(false)
     })
     return () => { generation.current += 1 }
-  }, [contributionId, navigation.entries, navigation.loading, open, pluginId])
+  }, [
+    contributionId,
+    navigationEntry?.contributionId,
+    navigationEntry?.installationId,
+    navigationEntry?.pluginId,
+    navigationPendingWithoutEntry,
+    open,
+    pluginId,
+  ])
 
-  const act = async (action: UserPluginInteractiveAction, value: string | null) => {
+  useEffect(() => {
+    setPendingAction(null)
+  }, [contributionId, entry?.installationId, pluginId])
+
+  useEffect(() => {
+    if (
+      entry === null || navigationEntry === undefined ||
+      entry.pluginId !== navigationEntry.pluginId ||
+      entry.installationId !== navigationEntry.installationId ||
+      entry.contributionId !== navigationEntry.contributionId ||
+      entry.packageVersion === navigationEntry.packageVersion ||
+      busy || pendingAction !== null
+    ) return
+    const requestGeneration = ++generation.current
+    setEntry(navigationEntry)
+    void open(navigationEntry, requestGeneration)
+  }, [
+    busy,
+    entry,
+    navigationEntry,
+    open,
+    pendingAction,
+  ])
+
+  const performAction = async (pending: PendingPluginAction) => {
     if (!entry || !snapshot || busy || refreshing) return
     const requestGeneration = generation.current
     const operation = ++operationGeneration.current
     setBusy(true)
     try {
-      const result = await authenticatedApi.interactUserPluginSurface({
+      const result = await authenticatedApi.interactUserPluginSurface(pending.request)
+      if (generation.current !== requestGeneration || operationGeneration.current !== operation) {
+        return
+      }
+      setPendingAction(null)
+      if (result.ok && pending.clearInputOnSuccess) setInput('')
+      if (!applyResult(result) && !result.ok && result.error === 'PLUGIN_UI_CONFLICT') {
+        setBusy(false)
+        await open(entry, requestGeneration)
+      }
+    } catch {
+      if (generation.current === requestGeneration && operationGeneration.current === operation) {
+        setPendingAction(pending)
+        setError('The plugin action failed.')
+      }
+    } finally {
+      if (generation.current === requestGeneration) setBusy(false)
+    }
+  }
+
+  const act = async (
+    action: UserPluginInteractiveAction,
+    value: string | null,
+    clearInputOnSuccess = false,
+  ) => {
+    if (!entry || !snapshot || busy || refreshing || pendingAction) return
+    await performAction({
+      request: {
         pluginId: entry.pluginId,
         expectedInstallationId: entry.installationId,
+        expectedPackageVersion: entry.packageVersion,
         contributionId: entry.contributionId,
         interaction: {
           kind: 'action',
@@ -117,29 +191,33 @@ export function PluginSurfacePage({
           actionId: action.actionId,
           input: value,
         },
-      })
-      if (generation.current !== requestGeneration || operationGeneration.current !== operation) {
-        return
-      }
-      if (!applyResult(result) && !result.ok && result.error === 'PLUGIN_UI_CONFLICT') {
-        setBusy(false)
-        await open(entry, requestGeneration)
-      }
-    } catch {
-      if (generation.current === requestGeneration && operationGeneration.current === operation) {
-        setError('The plugin action failed.')
-      }
-    } finally {
-      if (generation.current === requestGeneration) setBusy(false)
-    }
+      },
+      clearInputOnSuccess,
+    })
+  }
+
+  const discardPendingActionAndReload = async () => {
+    if (!entry || !pendingAction || busy || refreshing) return
+    const latestEntry = navigationEntry !== undefined &&
+      navigationEntry.pluginId === entry.pluginId &&
+      navigationEntry.installationId === entry.installationId &&
+      navigationEntry.contributionId === entry.contributionId
+      ? navigationEntry
+      : entry
+    setPendingAction(null)
+    setEntry(latestEntry)
+    await open(latestEntry, generation.current)
   }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     if (!snapshot?.document.form || input.trim().length === 0) return
     const form = snapshot.document.form
-    await act({actionId: form.actionId, label: form.label, tone: 'neutral'}, input.trim())
-    setInput('')
+    await act(
+      {actionId: form.actionId, label: form.label, tone: 'neutral'},
+      input.trim(),
+      true,
+    )
   }
 
   if (loading && !snapshot) {
@@ -171,7 +249,7 @@ export function PluginSurfacePage({
         <button
           type="button"
           onClick={() => entry && !busy && !refreshing && void open(entry, generation.current)}
-          disabled={busy || refreshing}
+          disabled={busy || refreshing || pendingAction !== null}
           className="flex h-9 items-center gap-2 rounded-lg border border-kumo-line bg-kumo-base px-3 text-[12px] font-medium text-kumo-default hover:bg-kumo-tint"
         >
           <ArrowClockwise size={14} /> Refresh
@@ -183,6 +261,7 @@ export function PluginSurfacePage({
           <input
             value={input}
             maxLength={document.form.maxLength}
+            disabled={pendingAction !== null}
             onChange={event => setInput(event.target.value)}
             placeholder={document.form.placeholder}
             aria-label={document.form.placeholder}
@@ -190,7 +269,7 @@ export function PluginSurfacePage({
           />
           <button
             type="submit"
-            disabled={busy || refreshing || input.trim().length === 0}
+            disabled={busy || refreshing || pendingAction !== null || input.trim().length === 0}
             className="flex h-10 items-center gap-2 rounded-lg bg-kumo-brand px-4 text-[13px] font-semibold text-white disabled:opacity-50"
           >
             <Plus size={14} weight="bold" /> {document.form.label}
@@ -198,7 +277,31 @@ export function PluginSurfacePage({
         </form>
       )}
 
-      {error && <p role="alert" className="mb-4 text-[12px] text-kumo-danger">{error}</p>}
+      {(error || pendingAction) && (
+        <div className="mb-4 flex items-center gap-3">
+          {error && <p role="alert" className="text-[12px] text-kumo-danger">{error}</p>}
+          {pendingAction && (
+            <button
+              type="button"
+              disabled={busy || refreshing}
+              onClick={() => void performAction(pendingAction)}
+              className="rounded-md border border-kumo-line px-2 py-1 text-[11px] font-medium text-kumo-default hover:bg-kumo-tint disabled:opacity-50"
+            >
+              Retry action
+            </button>
+          )}
+          {pendingAction && (
+            <button
+              type="button"
+              disabled={busy || refreshing}
+              onClick={() => void discardPendingActionAndReload()}
+              className="rounded-md px-2 py-1 text-[11px] font-medium text-kumo-subtle hover:bg-kumo-tint disabled:opacity-50"
+            >
+              Reload latest
+            </button>
+          )}
+        </div>
+      )}
       <div
         className="grid gap-4 lg:grid-cols-[repeat(auto-fit,minmax(240px,1fr))]"
         aria-label={document.title}
@@ -220,7 +323,7 @@ export function PluginSurfacePage({
                       <button
                         key={action.actionId}
                         type="button"
-                        disabled={busy || refreshing}
+                        disabled={busy || refreshing || pendingAction !== null}
                         onClick={() => void act(action, null)}
                         className={action.tone === 'danger'
                           ? 'rounded-md px-2 py-1 text-[11px] font-medium text-kumo-danger hover:bg-kumo-danger-tint'

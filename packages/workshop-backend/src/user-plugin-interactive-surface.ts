@@ -130,6 +130,7 @@ export async function buildUserPluginNavigation(
       entries.push({
         pluginId: installation.pluginId,
         installationId: installation.installationId,
+        packageVersion: installation.packageVersion,
         contributionId: contribution.contributionId,
         title: contribution.title,
       });
@@ -152,6 +153,7 @@ export async function interactUserPluginSurface(
     request.expectedInstallationId,
   );
   if (installation === null) return unavailable;
+  if (installation.packageVersion !== request.expectedPackageVersion) return unavailable;
   const manifest = await host.resolveManifest(
     installation.pluginId,
     installation.packageVersion,
