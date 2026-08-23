@@ -5,6 +5,7 @@ import type {PluginUiArtifactResolver} from "./dynamic-worker-plugin-ui-renderer
 import type {VerifiedPluginCodeArtifact} from "./plugin-code-artifact.js";
 import type {UserPluginInteractiveDocument} from "@gadgets/workshop-shared/api";
 import {snapshotUserPluginInteractiveDocument} from "./plugin-interactive-ui.js";
+import {runPluginUiRpcWithinDeadline} from "./plugin-ui-rpc-deadline.js";
 
 const INTERACTIVE_UI_COMPATIBILITY_DATE = "2026-02-01";
 const INTERACTIVE_UI_FLAGS = ["disallow_importable_env"] as const;
@@ -173,12 +174,6 @@ export interface InteractivePluginUiWorkerStarter {
   ): Promise<unknown>;
 }
 
-function disposeRpcValue(value: object): void {
-  if (!(Symbol.dispose in value)) return;
-  const dispose = value[Symbol.dispose];
-  if (typeof dispose === "function") dispose.call(value);
-}
-
 /** Production adapter around Worker Loader's fresh execution boundary. */
 export class WorkerLoaderInteractivePluginUiStarter implements InteractivePluginUiWorkerStarter {
   constructor(private loader: Pick<WorkerLoader, "load">) {}
@@ -189,27 +184,13 @@ export class WorkerLoaderInteractivePluginUiStarter implements InteractivePlugin
     const entrypoint = this.loader.load(await getCode())
       .getEntrypoint<InteractivePluginUiEntrypoint>();
     const pending = entrypoint.interact(request);
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const result = await Promise.race([
-        pending,
-        new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error("Interactive plugin UI timed out.")),
-            INTERACTIVE_UI_TIMEOUT_MS,
-          );
-        }),
-      ]);
-      try {
-        return structuredClone(result);
-      } finally {
-        if (typeof result === "object" && result !== null) disposeRpcValue(result);
-      }
-    } finally {
-      if (timeout !== undefined) clearTimeout(timeout);
-      disposeRpcValue(pending);
-      disposeRpcValue(entrypoint);
-    }
+    return runPluginUiRpcWithinDeadline(
+      pending,
+      [entrypoint],
+      INTERACTIVE_UI_TIMEOUT_MS,
+      "Interactive plugin UI timed out.",
+      result => structuredClone(result),
+    );
   }
 }
 

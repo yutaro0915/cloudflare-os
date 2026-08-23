@@ -118,11 +118,24 @@ describe("reconciled plugin runtime realm", () => {
 
     await realm.refresh();
     expect(starter.ids).toHaveLength(1);
+    expect(realm.getStatus()).toMatchObject({
+      outcome: "ready",
+      states: [{
+        pluginId: "example.runtime",
+        status: "active",
+        active: {manifestDigest},
+      }],
+      observedAt: expect.any(Number),
+    });
     realm.assertGate("example.runtime", starter.ids[0]!, manifestDigest, "active");
 
     source.error = new Error("UserDO read failed");
     await expect(realm.refresh()).rejects.toThrow("UserDO read failed");
     expect(starter.ids).toHaveLength(1);
+    expect(realm.getStatus()).toMatchObject({
+      outcome: "refresh-failed",
+      states: [{pluginId: "example.runtime", status: "active"}],
+    });
     realm.assertGate("example.runtime", starter.ids[0]!, manifestDigest, "active");
 
     realm.revokeAll();
@@ -179,6 +192,10 @@ describe("reconciled plugin runtime realm", () => {
     await realm.refresh();
 
     expect(starter.ids).toEqual([activeKey]);
+    expect(realm.getStatus()).toMatchObject({
+      outcome: "conflict",
+      states: [{pluginId: "example.runtime", status: "active"}],
+    });
     realm.assertGate("example.runtime", activeKey, manifestDigest, "active");
     realm.revokeAll();
     await realm.close();
@@ -194,6 +211,14 @@ describe("reconciled plugin runtime realm", () => {
     await realm.refresh();
 
     expect(starter.ids).toEqual([activeKey]);
+    expect(realm.getStatus()).toMatchObject({
+      outcome: "ready",
+      states: [{
+        pluginId: "example.runtime",
+        status: "failed",
+        reason: "MANIFEST_DENYLISTED",
+      }],
+    });
     expect(() => realm.assertPluginActive("example.runtime"))
       .toThrow("Plugin runtime plugin is inactive");
     expect(() => realm.assertGate("example.runtime", activeKey, manifestDigest, "active"))

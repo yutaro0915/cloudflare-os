@@ -69,6 +69,8 @@ export interface UserPluginInteractiveSurfaceHost {
   ): Promise<
     {ok: true; revision: number; replayed: boolean} |
     {ok: false; currentRevision: number} |
+    {ok: false; currentRevision: number; error: "CELL_QUOTA_EXCEEDED" |
+      "BYTE_QUOTA_EXCEEDED"} |
     null
   >;
 }
@@ -205,6 +207,9 @@ export async function interactUserPluginSurface(
     request.interaction.mutationId,
   );
   if (committed === null) return unavailable;
+  if (!committed.ok && "error" in committed) {
+    return {ok: false, error: "PLUGIN_UI_STATE_QUOTA_EXCEEDED"};
+  }
   if (!committed.ok) return {ok: false, error: "PLUGIN_UI_CONFLICT"};
   if (!await remainsCurrent(host, installation)) return unavailable;
   if (!committed.replayed) {

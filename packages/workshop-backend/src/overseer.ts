@@ -1,6 +1,6 @@
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
-import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, type AgentDefinition, type AgentBindingRef, type InstallPluginRequest, type InstallWorkspacePluginResult } from '@gadgets/workshop-shared/api';
+import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, type AgentDefinition, type AgentBindingRef, type InstallPluginRequest, type InstallWorkspacePluginResult, type UninstallWorkspacePluginRequest, type UninstallWorkspacePluginResult, type DetachedWorkspacePluginStateSummary, type PurgeWorkspacePluginStateRequest, type PurgeWorkspacePluginStateResult, type PluginRuntimeStatusView } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, HookInitiator, ResourceDescription, ApprovalQueue, ActionDescription, ObservationAuthorizer, ObservationDescription, VendorDescription, SupportedResource, resolveRequestedResource, HookController, HookDescription, AGENT_CATALOG_MAX_ENTRIES, ActionKind } from "@gadgets/workshop-shared/gatekeeper";
 import {
   DurableObject, WorkerEntrypoint, RpcStub as NativeRpcStub,
@@ -51,14 +51,20 @@ import {
   validateChatAttachmentUpload,
 } from "./chat-attachment-validation";
 import { renderGadgetPdf } from "./browser-export";
-import { bundledPluginManifestResolver } from "./bundled-plugin-manifests.js";
 import {isUserOnlyPluginManifest} from "./plugin-manifest-registry.js";
-import { bundledPluginCodeArtifactResolver } from "./bundled-plugin-artifacts.js";
+import {
+  createPluginStoreCodeArtifactResolver,
+  createPluginStoreManifestCatalog,
+} from "./plugin-store-resolvers.js";
 import {
   WorkerLoaderPluginWorkerStarter,
   type PluginRuntimeRealmIdentity,
 } from "./dynamic-worker-plugin-activator.js";
-import { PluginRuntimeRealms, type PluginRuntimeRealmSession } from "./plugin-runtime-realms.js";
+import {
+  PluginRuntimeRealms,
+  type PluginRuntimeAuditEvent,
+  type PluginRuntimeRealmSession,
+} from "./plugin-runtime-realms.js";
 import { ReconciledPluginRuntimeRealm } from "./reconciled-plugin-runtime-realm.js";
 import {
   makePluginRuntimeCapabilityEnv,
@@ -78,6 +84,13 @@ import {
   isPluginRuntimeLifecycleAuthorized,
   type WorkspacePluginAuditEvent,
   type WorkspacePluginInstallationRecord,
+  type WorkspacePluginInstallationRevocation,
+  type DetachedWorkspacePluginStateRecord,
+  type WorkspacePluginStatePurge,
+  type BeginWorkspacePluginUninstallResult,
+  type FinalizeWorkspacePluginUninstallResult,
+  type BeginWorkspacePluginStatePurgeResult,
+  type FinalizeWorkspacePluginStatePurgeResult,
 } from "./plugin-installation.js";
 
 const logger = createWorkshopLogger("workshop.overseer");
@@ -758,6 +771,7 @@ function makeOverseerStorage(storage: DurableObjectStorage) {
 
       nextActionId: 0,
       nextWorkspacePluginAuditSequence: 0,
+      nextPluginRuntimeAuditSequence: 0,
       nextChatId: 0,
       nextHookId: 0,
 
@@ -829,6 +843,22 @@ function makeOverseerStorage(storage: DurableObjectStorage) {
 
       workspacePluginAuditEvents: collection<WorkspacePluginAuditEvent>()({
         primaryKey: "sequence",
+      }),
+
+      pluginRuntimeAuditEvents: collection<PluginRuntimeAuditEvent>()({
+        primaryKey: "sequence",
+      }),
+
+      workspacePluginRevocations: collection<WorkspacePluginInstallationRevocation>()({
+        primaryKey: "installationId",
+      }),
+
+      detachedWorkspacePluginStates: collection<DetachedWorkspacePluginStateRecord>()({
+        primaryKey: "installationId",
+      }),
+
+      workspacePluginStatePurges: collection<WorkspacePluginStatePurge>()({
+        primaryKey: "installationId",
       }),
 
       boundHooks: collection<BoundHookRecord>()({
@@ -1421,6 +1451,7 @@ class OverseerImpl implements AgentHooks {
     const workspaceId = this.ctx.id.toString();
     const user = this.users.get(this.users.idFromString(identity.userId));
     const adminSettings = this.ctx.exports.AdminSettings.getByName("");
+    const pluginStore = this.ctx.exports.PluginStoreDurableObject.getByName("");
     const assertTargets = (
         deployment: DeploymentPluginInstallationRecord[],
         workspace: WorkspacePluginInstallationRecord[],
@@ -1455,15 +1486,19 @@ class OverseerImpl implements AgentHooks {
           adminSettings.id.toString(),
         );
         const deployment = policy.deployment;
-        const workspace = Array.from(this.storage.workspacePluginInstallations.list());
+        const workspace = Array.from(this.storage.workspacePluginInstallations.list()).filter(
+          installation => this.storage.workspacePluginRevocations.get(
+            installation.installationId,
+          ) === undefined,
+        );
         assertTargets(deployment, workspace, personal);
         return {
           desiredState: {deployment, workspace, user: personal},
           deniedManifestDigests: policy.deniedManifestDigests,
         };
       },
-      manifests: bundledPluginManifestResolver,
-      artifacts: bundledPluginCodeArtifactResolver,
+      manifests: Promise.resolve(createPluginStoreManifestCatalog(pluginStore)),
+      artifacts: createPluginStoreCodeArtifactResolver(pluginStore),
       starter: new WorkerLoaderPluginWorkerStarter(this.env.LOADER),
       makeCapabilityEnv: (plan, activationKey) => makePluginRuntimeCapabilityEnv(
         identity,
@@ -1476,6 +1511,21 @@ class OverseerImpl implements AgentHooks {
           pluginState: props => this.ctx.exports.PluginStateReadCapability({props}),
         },
       ),
+      recordStatus: (action, status) => {
+        this.ctx.storage.transactionSync(() => {
+          const sequence = this.storage.nextPluginRuntimeAuditSequence.get();
+          this.storage.pluginRuntimeAuditEvents.put({
+            schemaVersion: 1,
+            sequence,
+            action,
+            realmUserId: identity.userId,
+            realmRole: identity.role,
+            status,
+            recordedAt: Date.now(),
+          });
+          this.storage.nextPluginRuntimeAuditSequence.put(sequence + 1);
+        });
+      },
     });
   }
 
@@ -6547,9 +6597,29 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     return Array.from(this.impl.storage.workspacePluginInstallations.list());
   }
 
+  /** Returns only non-revoked workspace desired state for runtime reconstruction. */
+  async readWorkspacePluginInstallationsSnapshotForRuntimeHost(): Promise<unknown> {
+    return Array.from(this.impl.storage.workspacePluginInstallations.list()).filter(
+      installation => this.impl.storage.workspacePluginRevocations.get(
+        installation.installationId,
+      ) === undefined,
+    );
+  }
+
+  /** Lists host-only detached workspace state records including their opaque references. */
+  async listDetachedWorkspacePluginStatesForHost():
+      Promise<DetachedWorkspacePluginStateRecord[]> {
+    return Array.from(this.impl.storage.detachedWorkspacePluginStates.list());
+  }
+
   /** Lists workspace plugin audit events for trusted host orchestration and tests. */
   async listWorkspacePluginAuditEventsForHost(): Promise<WorkspacePluginAuditEvent[]> {
     return Array.from(this.impl.storage.workspacePluginAuditEvents.list());
+  }
+
+  /** Lists append-only realm status and failure events for trusted operations and tests. */
+  async listPluginRuntimeAuditEventsForHost(): Promise<PluginRuntimeAuditEvent[]> {
+    return Array.from(this.impl.storage.pluginRuntimeAuditEvents.list());
   }
 
   /** Verifies one host-minted Dynamic Worker gate claim against the current realm generation. */
@@ -6590,6 +6660,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     if (claim.scope === "workspace") {
       const current = this.impl.storage.workspacePluginInstallations.get(claim.pluginId);
       authorized = claim.targetId === this.ctx.id.toString() && current !== undefined &&
+        this.impl.storage.workspacePluginRevocations.get(current.installationId) === undefined &&
         isPluginRuntimeCandidateCurrent(current, claim);
     } else if (claim.scope === "user") {
       authorized = claim.targetId === identity.userId &&
@@ -6631,6 +6702,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     if (claim.scope === "workspace") {
       const current = this.impl.storage.workspacePluginInstallations.get(claim.pluginId);
       authorized = claim.targetId === this.ctx.id.toString() && current !== undefined &&
+        this.impl.storage.workspacePluginRevocations.get(current.installationId) === undefined &&
         isPluginRuntimeLifecycleAuthorized(current, claim);
     } else if (claim.scope === "user") {
       authorized = claim.targetId === identity.userId &&
@@ -6679,6 +6751,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     if (claim.scope === "workspace") {
       const current = this.impl.storage.workspacePluginInstallations.get(claim.pluginId);
       authorized = claim.targetId === this.ctx.id.toString() && current !== undefined &&
+        this.impl.storage.workspacePluginRevocations.get(current.installationId) === undefined &&
         isPluginRuntimeCapabilityAuthorized(current, claim);
     } else if (claim.scope === "user") {
       authorized = claim.targetId === identity.userId &&
@@ -7691,9 +7764,15 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     return result;
   }
 
+  async getPluginRuntimeStatus(): Promise<PluginRuntimeStatusView> {
+    return this.pluginRuntimeSession.getStatus();
+  }
+
   async installWorkspacePlugin(
       request: InstallPluginRequest): Promise<InstallWorkspacePluginResult> {
-    const resolver = await bundledPluginManifestResolver;
+    const resolver = createPluginStoreManifestCatalog(
+      this.impl.ctx.exports.PluginStoreDurableObject.getByName(""),
+    );
     const resolved = await resolveApprovedPluginManifest(resolver, request);
     if (!resolved.ok) return resolved;
     const manifest = resolved.manifest;
@@ -7707,6 +7786,13 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
     this.impl.ctx.storage.transactionSync(() => {
       const existing = this.impl.storage.workspacePluginInstallations.get(manifest.pluginId);
+      if (
+        existing !== undefined &&
+        this.impl.storage.workspacePluginRevocations.get(existing.installationId) !== undefined
+      ) {
+        result = {ok: false, error: "UNINSTALL_IN_PROGRESS"};
+        return;
+      }
       const approvedCapabilities = this.isOwner
         ? [...manifest.requestedCapabilities]
         : [...(existing?.approvedCapabilities ?? [])];
@@ -7719,9 +7805,22 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
       }
 
       const targetId = this.impl.ctx.id.toString();
+      const installationId = existing?.installationId ?? crypto.randomUUID();
+      const stateRef = existing?.stateRef ?? (
+        manifest.state?.kind === "installation" ||
+        manifest.requestedCapabilities.includes("plugin.state.read")
+          ? this.impl.ctx.exports.PluginStateDurableObject.getByName(JSON.stringify([
+            "plugin-state-v1",
+            "workspace",
+            targetId,
+            manifest.pluginId,
+            installationId,
+          ])).id.toString()
+          : undefined
+      );
       const installation: WorkspacePluginInstallationRecord = {
         schemaVersion: 1,
-        installationId: existing?.installationId ?? crypto.randomUUID(),
+        installationId,
         scope: "workspace",
         targetId,
         pluginId: manifest.pluginId,
@@ -7731,7 +7830,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
         approvedCapabilities,
         grantedCapabilities: [...manifest.requestedCapabilities],
         config: existing?.config ?? null,
-        ...(existing?.stateRef === undefined ? {} : {stateRef: existing.stateRef}),
+        ...(stateRef === undefined ? {} : {stateRef}),
       };
       const sequence = this.impl.storage.nextWorkspacePluginAuditSequence.get();
       const event: WorkspacePluginAuditEvent = {
@@ -7755,6 +7854,249 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
       this.impl.storage.workspacePluginAuditEvents.put(event);
       this.impl.storage.nextWorkspacePluginAuditSequence.put(sequence + 1);
       result = {ok: true, installationId: installation.installationId};
+    });
+    return result;
+  }
+
+  async uninstallWorkspacePlugin(
+      request: UninstallWorkspacePluginRequest): Promise<UninstallWorkspacePluginResult> {
+    const begun = this.#beginWorkspacePluginUninstall(
+      request.pluginId,
+      request.expectedInstallationId,
+    );
+    if (!begun.ok) return begun;
+    return this.#finalizeWorkspacePluginUninstall(begun.installationId);
+  }
+
+  #beginWorkspacePluginUninstall(
+      pluginId: string,
+      expectedInstallationId: string): BeginWorkspacePluginUninstallResult {
+    let result: BeginWorkspacePluginUninstallResult = {
+      ok: false,
+      error: "PLUGIN_NOT_INSTALLED",
+    };
+    this.impl.ctx.storage.transactionSync(() => {
+      const exact = this.impl.storage.workspacePluginRevocations.get(expectedInstallationId);
+      if (exact?.pluginId === pluginId) {
+        result = {ok: true, installationId: expectedInstallationId};
+        return;
+      }
+      const installation = this.impl.storage.workspacePluginInstallations.get(pluginId);
+      if (installation === undefined) return;
+      if (installation.installationId !== expectedInstallationId) {
+        result = {ok: false, error: "INSTALLATION_CHANGED"};
+        return;
+      }
+      this.impl.storage.workspacePluginRevocations.put({
+        schemaVersion: 1,
+        installationId: installation.installationId,
+        pluginId: installation.pluginId,
+        ...(installation.stateRef === undefined ? {} : {stateRef: installation.stateRef}),
+        startedAt: Date.now(),
+      });
+      result = {ok: true, installationId: installation.installationId};
+    });
+    return result;
+  }
+
+  #finalizeWorkspacePluginUninstall(
+      installationId: string): FinalizeWorkspacePluginUninstallResult {
+    let result: FinalizeWorkspacePluginUninstallResult = {
+      ok: false,
+      error: "PLUGIN_NOT_INSTALLED",
+    };
+    this.impl.ctx.storage.transactionSync(() => {
+      const revocation = this.impl.storage.workspacePluginRevocations.get(installationId);
+      if (revocation === undefined) return;
+      if (revocation.finalizedAt !== undefined) {
+        result = {
+          ok: true,
+          installationId,
+          retainedState: this.impl.storage.detachedWorkspacePluginStates.get(installationId) !==
+            undefined,
+        };
+        return;
+      }
+      const installation = this.impl.storage.workspacePluginInstallations.get(
+        revocation.pluginId,
+      );
+      if (installation?.installationId !== installationId) {
+        result = {ok: false, error: "UNINSTALL_IN_PROGRESS"};
+        return;
+      }
+      const detachedAt = Date.now();
+      if (installation.stateRef !== undefined) {
+        this.impl.storage.detachedWorkspacePluginStates.put({
+          schemaVersion: 1,
+          installationId,
+          pluginId: installation.pluginId,
+          packageVersion: installation.packageVersion,
+          manifestDigest: installation.manifestDigest,
+          stateRef: installation.stateRef,
+          detachedAt,
+        });
+      }
+      const sequence = this.impl.storage.nextWorkspacePluginAuditSequence.get();
+      this.impl.storage.workspacePluginAuditEvents.put({
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_UNINSTALLED",
+        actorUserId: this.clientUserId,
+        actorProfileId: this.clientProfileId,
+        authority: this.isOwner ? "owner" : "build",
+        scope: "workspace",
+        targetId: this.impl.ctx.id.toString(),
+        installationId,
+        pluginId: installation.pluginId,
+        packageVersion: installation.packageVersion,
+        manifestDigest: installation.manifestDigest,
+        approvedCapabilities: [],
+        grantedCapabilities: [],
+        recordedAt: detachedAt,
+      });
+      this.impl.storage.workspacePluginInstallations.delete(installation.pluginId);
+      this.impl.storage.workspacePluginRevocations.put({...revocation, finalizedAt: detachedAt});
+      this.impl.storage.nextWorkspacePluginAuditSequence.put(sequence + 1);
+      result = {
+        ok: true,
+        installationId,
+        retainedState: installation.stateRef !== undefined,
+      };
+    });
+    return result;
+  }
+
+  async listDetachedWorkspacePluginStates(): Promise<DetachedWorkspacePluginStateSummary[]> {
+    return Array.from(
+      this.impl.storage.detachedWorkspacePluginStates.list(),
+      record => ({
+        installationId: record.installationId,
+        pluginId: record.pluginId,
+        packageVersion: record.packageVersion,
+        detachedAt: record.detachedAt,
+      }),
+    );
+  }
+
+  async purgeWorkspacePluginState(
+      request: PurgeWorkspacePluginStateRequest): Promise<PurgeWorkspacePluginStateResult> {
+    if (!this.isOwner) {
+      throw new Error("Unauthorized: only the workspace owner may purge plugin state.");
+    }
+    const begun = this.#beginWorkspacePluginStatePurge(request.installationId);
+    if (!begun.ok) return begun;
+    if (begun.phase === "FINALIZED") {
+      return {ok: true, installationId: begun.installationId};
+    }
+    const states = this.impl.ctx.exports.PluginStateDurableObject;
+    await states.get(states.idFromString(begun.stateRef)).purge(begun.owner);
+    return this.#finalizeWorkspacePluginStatePurge(begun.installationId);
+  }
+
+  #beginWorkspacePluginStatePurge(
+      installationId: string): BeginWorkspacePluginStatePurgeResult {
+    let result: BeginWorkspacePluginStatePurgeResult = {
+      ok: false,
+      error: "DETACHED_PLUGIN_STATE_NOT_FOUND",
+    };
+    this.impl.ctx.storage.transactionSync(() => {
+      const exact = this.impl.storage.workspacePluginStatePurges.get(installationId);
+      if (exact !== undefined) {
+        if (exact.phase === "FINALIZED") {
+          result = {ok: true, phase: "FINALIZED", installationId};
+          return;
+        }
+        result = {
+          ok: true,
+          phase: "PURGE_REQUIRED",
+          installationId,
+          stateRef: exact.stateRef,
+          owner: {
+            scope: "workspace",
+            targetId: this.impl.ctx.id.toString(),
+            pluginId: exact.pluginId,
+            installationId,
+          },
+        };
+        return;
+      }
+      const detached = this.impl.storage.detachedWorkspacePluginStates.get(installationId);
+      if (detached === undefined) return;
+      this.impl.storage.workspacePluginStatePurges.put({
+        schemaVersion: 1,
+        phase: "PENDING",
+        installationId,
+        pluginId: detached.pluginId,
+        packageVersion: detached.packageVersion,
+        manifestDigest: detached.manifestDigest,
+        stateRef: detached.stateRef,
+        startedAt: Date.now(),
+      });
+      result = {
+        ok: true,
+        phase: "PURGE_REQUIRED",
+        installationId,
+        stateRef: detached.stateRef,
+        owner: {
+          scope: "workspace",
+          targetId: this.impl.ctx.id.toString(),
+          pluginId: detached.pluginId,
+          installationId,
+        },
+      };
+    });
+    return result;
+  }
+
+  #finalizeWorkspacePluginStatePurge(
+      installationId: string): FinalizeWorkspacePluginStatePurgeResult {
+    let result: FinalizeWorkspacePluginStatePurgeResult = {
+      ok: false,
+      error: "DETACHED_PLUGIN_STATE_NOT_FOUND",
+    };
+    this.impl.ctx.storage.transactionSync(() => {
+      const purge = this.impl.storage.workspacePluginStatePurges.get(installationId);
+      if (purge === undefined) return;
+      if (purge.phase === "FINALIZED") {
+        result = {ok: true, installationId};
+        return;
+      }
+      const detached = this.impl.storage.detachedWorkspacePluginStates.get(installationId);
+      if (
+        detached === undefined || detached.pluginId !== purge.pluginId ||
+        detached.stateRef !== purge.stateRef
+      ) return;
+      const purgedAt = Date.now();
+      const sequence = this.impl.storage.nextWorkspacePluginAuditSequence.get();
+      this.impl.storage.workspacePluginAuditEvents.put({
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_STATE_PURGED",
+        actorUserId: this.clientUserId,
+        actorProfileId: this.clientProfileId,
+        authority: "owner",
+        scope: "workspace",
+        targetId: this.impl.ctx.id.toString(),
+        installationId,
+        pluginId: detached.pluginId,
+        packageVersion: detached.packageVersion,
+        manifestDigest: detached.manifestDigest,
+        approvedCapabilities: [],
+        grantedCapabilities: [],
+        recordedAt: purgedAt,
+      });
+      this.impl.storage.detachedWorkspacePluginStates.delete(installationId);
+      this.impl.storage.workspacePluginStatePurges.put({
+        schemaVersion: 1,
+        phase: "FINALIZED",
+        installationId,
+        pluginId: purge.pluginId,
+        packageVersion: purge.packageVersion,
+        manifestDigest: purge.manifestDigest,
+        purgedAt,
+      });
+      this.impl.storage.nextWorkspacePluginAuditSequence.put(sequence + 1);
+      result = {ok: true, installationId};
     });
     return result;
   }
@@ -9399,8 +9741,26 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
     };
   }
 
+  async getPluginRuntimeStatus(): Promise<PluginRuntimeStatusView> {
+    return this.pluginRuntimeSession.getStatus();
+  }
+
   async installWorkspacePlugin(
       _request: InstallPluginRequest): Promise<InstallWorkspacePluginResult> {
+    this.#deny();
+  }
+
+  async uninstallWorkspacePlugin(
+      _request: UninstallWorkspacePluginRequest): Promise<UninstallWorkspacePluginResult> {
+    this.#deny();
+  }
+
+  async listDetachedWorkspacePluginStates(): Promise<DetachedWorkspacePluginStateSummary[]> {
+    this.#deny();
+  }
+
+  async purgeWorkspacePluginState(
+      _request: PurgeWorkspacePluginStateRequest): Promise<PurgeWorkspacePluginStateResult> {
     this.#deny();
   }
 

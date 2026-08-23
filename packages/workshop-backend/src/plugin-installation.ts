@@ -174,7 +174,7 @@ export interface DetachedUserPluginStateRecord {
 
 /** Immutable identity bound to one user-owned PluginState Durable Object. */
 export interface PluginStateOwner {
-  scope: "user";
+  scope: "deployment" | "workspace" | "user";
   targetId: string;
   pluginId: string;
   installationId: string;
@@ -199,6 +199,24 @@ export type UserPluginStatePurge = {
   manifestDigest: string;
   purgedAt: number;
 };
+
+/** Workspace-owned revocation marker with the same durable lifecycle shape as user scope. */
+export type WorkspacePluginInstallationRevocation = UserPluginInstallationRevocation;
+
+/** Deployment-owned revocation marker with the same durable lifecycle shape as user scope. */
+export type DeploymentPluginInstallationRevocation = UserPluginInstallationRevocation;
+
+/** Host-only retained workspace state pointer. */
+export type DetachedWorkspacePluginStateRecord = DetachedUserPluginStateRecord;
+
+/** Host-only retained deployment state pointer. */
+export type DetachedDeploymentPluginStateRecord = DetachedUserPluginStateRecord;
+
+/** Persistent workspace state-purge saga marker. */
+export type WorkspacePluginStatePurge = UserPluginStatePurge;
+
+/** Persistent deployment state-purge saga marker. */
+export type DeploymentPluginStatePurge = UserPluginStatePurge;
 
 const MAX_PLUGIN_CONFIGURATION_DEPTH = 32;
 const MAX_PLUGIN_CONFIGURATION_VALUES = 10_000;
@@ -467,6 +485,9 @@ export interface PutDeploymentPluginInstallationInput {
   /** Capabilities requested by the verified manifest and approved by the administrator. */
   grantedCapabilities: string[];
 
+  /** Trusted manifest-derived state ownership request. */
+  stateRequirement?: "none" | "installation";
+
   /** Authenticated administrator captured when the AdminApi capability was minted. */
   actor: PluginMutationActor;
 }
@@ -480,7 +501,7 @@ export interface DeploymentPluginAuditEvent {
   sequence: number;
 
   /** Mutation recorded by this event. */
-  action: "PLUGIN_DESIRED_STATE_PUT";
+  action: "PLUGIN_DESIRED_STATE_PUT" | "PLUGIN_UNINSTALLED" | "PLUGIN_STATE_PURGED";
 
   /** UserDurableObject ID of the authenticated administrator. */
   actorUserId: string;
@@ -525,7 +546,7 @@ export interface WorkspacePluginAuditEvent {
   sequence: number;
 
   /** Mutation recorded by this event. */
-  action: "PLUGIN_DESIRED_STATE_PUT";
+  action: "PLUGIN_DESIRED_STATE_PUT" | "PLUGIN_UNINSTALLED" | "PLUGIN_STATE_PURGED";
 
   /** UserDurableObject ID of the authenticated actor. */
   actorUserId: string;
@@ -664,6 +685,30 @@ export type FinalizeUserPluginStatePurgeResult = {
   ok: false;
   error: "DETACHED_PLUGIN_STATE_NOT_FOUND";
 };
+
+/** Transactional first phase of a workspace-scoped uninstall. */
+export type BeginWorkspacePluginUninstallResult = BeginUserPluginUninstallResult;
+
+/** Idempotent workspace desired-state removal and optional state detach result. */
+export type FinalizeWorkspacePluginUninstallResult = FinalizeUserPluginUninstallResult;
+
+/** Transactional first phase of a workspace detached-state purge. */
+export type BeginWorkspacePluginStatePurgeResult = BeginUserPluginStatePurgeResult;
+
+/** Exactly-once workspace detached pointer removal and purge audit result. */
+export type FinalizeWorkspacePluginStatePurgeResult = FinalizeUserPluginStatePurgeResult;
+
+/** Transactional first phase of a deployment-scoped uninstall. */
+export type BeginDeploymentPluginUninstallResult = BeginUserPluginUninstallResult;
+
+/** Idempotent deployment desired-state removal and optional state detach result. */
+export type FinalizeDeploymentPluginUninstallResult = FinalizeUserPluginUninstallResult;
+
+/** Transactional first phase of a deployment detached-state purge. */
+export type BeginDeploymentPluginStatePurgeResult = BeginUserPluginStatePurgeResult;
+
+/** Exactly-once deployment detached pointer removal and purge audit result. */
+export type FinalizeDeploymentPluginStatePurgeResult = FinalizeUserPluginStatePurgeResult;
 
 /** Atomic host-only owner snapshot used to build one safe Plugin Center view. */
 export interface UserPluginCenterOwnerSnapshot {

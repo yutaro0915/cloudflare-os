@@ -1,4 +1,4 @@
-import { AdminApi, AdminFormat, AdminFormatPatch, AdminResourceVendor, AdminSettingsView, AmbientGatekeeperMode, BannerColor, BlueprintPublicInfo, MAX_ANNOUNCEMENT_LENGTH, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_SITE_NAME_LENGTH, isAmbientGatekeeperMode, isBannerColor, isHexColor, type InstallPluginRequest, type InstallPluginResult } from '@gadgets/workshop-shared/api';
+import { AdminApi, AdminFormat, AdminFormatPatch, AdminResourceVendor, AdminSettingsView, AmbientGatekeeperMode, BannerColor, BlueprintPublicInfo, MAX_ANNOUNCEMENT_LENGTH, MAX_INSTANCE_INSTRUCTIONS_LENGTH, MAX_SITE_NAME_LENGTH, isAmbientGatekeeperMode, isBannerColor, isHexColor, type InstallPluginRequest, type InstallPluginResult, type UninstallDeploymentPluginRequest, type UninstallDeploymentPluginResult, type DetachedDeploymentPluginStateSummary, type PurgeDeploymentPluginStateRequest, type PurgeDeploymentPluginStateResult } from '@gadgets/workshop-shared/api';
 import { GatekeeperVendor } from '@gadgets/workshop-shared/gatekeeper';
 import { DurableObject } from 'cloudflare:workers';
 import { RpcTarget } from 'capnweb';
@@ -33,7 +33,15 @@ import {
   type PluginRuntimeCandidateClaim,
   type PluginRuntimeLifecycleClaim,
   isPluginRuntimeLifecycleAuthorized,
+  type DeploymentPluginInstallationRevocation,
+  type DetachedDeploymentPluginStateRecord,
+  type DeploymentPluginStatePurge,
+  type BeginDeploymentPluginUninstallResult,
+  type FinalizeDeploymentPluginUninstallResult,
+  type BeginDeploymentPluginStatePurgeResult,
+  type FinalizeDeploymentPluginStatePurgeResult,
 } from './plugin-installation.js';
+import type {PluginStoreDurableObject} from './plugin-store.js';
 
 const logger = createWorkshopLogger("workshop.admin.settings");
 
@@ -50,6 +58,15 @@ function makeAdminSettingsStorage(storage: DurableObjectStorage) {
       }),
       deploymentPluginAuditEvents: collection<DeploymentPluginAuditEvent>()({
         primaryKey: 'sequence',
+      }),
+      deploymentPluginRevocations: collection<DeploymentPluginInstallationRevocation>()({
+        primaryKey: 'installationId',
+      }),
+      detachedDeploymentPluginStates: collection<DetachedDeploymentPluginStateRecord>()({
+        primaryKey: 'installationId',
+      }),
+      deploymentPluginStatePurges: collection<DeploymentPluginStatePurge>()({
+        primaryKey: 'installationId',
       }),
       pluginManifestDenylist: collection<PluginManifestDenylistRecord>()({
         primaryKey: 'manifestDigest',
@@ -120,13 +137,21 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
 
   /** Returns an untyped snapshot for a caller that must revalidate this cross-DO system boundary. */
   async readDeploymentPluginInstallationsSnapshotForRuntimeHost(): Promise<unknown> {
-    return Array.from(this.storage.deploymentPluginInstallations.list());
+    return Array.from(this.storage.deploymentPluginInstallations.list()).filter(
+      installation => this.storage.deploymentPluginRevocations.get(
+        installation.installationId,
+      ) === undefined,
+    );
   }
 
   /** Returns deployment desired state and permanent denylist in one host policy snapshot. */
   async readPluginRuntimePolicySnapshotForHost(): Promise<unknown> {
     return {
-      installations: Array.from(this.storage.deploymentPluginInstallations.list()),
+      installations: Array.from(this.storage.deploymentPluginInstallations.list()).filter(
+        installation => this.storage.deploymentPluginRevocations.get(
+          installation.installationId,
+        ) === undefined,
+      ),
       deniedManifestDigests: Array.from(
         this.storage.pluginManifestDenylist.list(),
         record => record.manifestDigest,
@@ -140,6 +165,7 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
     if (claim.scope !== "deployment" || claim.targetId !== this.ctx.id.toString()) return false;
     const installation = this.storage.deploymentPluginInstallations.get(claim.pluginId);
     return installation !== undefined &&
+      this.storage.deploymentPluginRevocations.get(installation.installationId) === undefined &&
       isPluginRuntimeCapabilityAuthorized(installation, claim);
   }
 
@@ -148,7 +174,9 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
       claim: PluginRuntimeCandidateClaim): Promise<boolean> {
     if (claim.scope !== "deployment" || claim.targetId !== this.ctx.id.toString()) return false;
     const installation = this.storage.deploymentPluginInstallations.get(claim.pluginId);
-    return installation !== undefined && isPluginRuntimeCandidateCurrent(installation, claim);
+    return installation !== undefined &&
+      this.storage.deploymentPluginRevocations.get(installation.installationId) === undefined &&
+      isPluginRuntimeCandidateCurrent(installation, claim);
   }
 
   /** Checks the deployment-owned active lifecycle before untrusted plugin invocation. */
@@ -157,6 +185,7 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
     if (claim.scope !== "deployment" || claim.targetId !== this.ctx.id.toString()) return false;
     const installation = this.storage.deploymentPluginInstallations.get(claim.pluginId);
     return installation !== undefined &&
+      this.storage.deploymentPluginRevocations.get(installation.installationId) === undefined &&
       isPluginRuntimeLifecycleAuthorized(installation, claim);
   }
 
@@ -205,18 +234,41 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
 
   /** Persists verified deployment plugin desired state and its audit event atomically. */
   async putDeploymentPluginInstallation(
-      input: PutDeploymentPluginInstallationInput): Promise<{installationId: string}> {
+      input: PutDeploymentPluginInstallationInput): Promise<
+        {ok: true; installationId: string} | {ok: false; error: "UNINSTALL_IN_PROGRESS"}
+      > {
     if (!isCanonicalPluginManifestDigest(input.manifestDigest)) {
       throw new Error("Verified deployment plugin manifest has an invalid digest.");
     }
 
-    let installationId = "";
+    let result: {ok: true; installationId: string} |
+      {ok: false; error: "UNINSTALL_IN_PROGRESS"} = {
+        ok: false,
+        error: "UNINSTALL_IN_PROGRESS",
+      };
     this.ctx.storage.transactionSync(() => {
       const existing = this.storage.deploymentPluginInstallations.get(input.pluginId);
+      if (
+        existing !== undefined &&
+        this.storage.deploymentPluginRevocations.get(existing.installationId) !== undefined
+      ) return;
       const targetId = this.ctx.id.toString();
+      const installationId = existing?.installationId ?? crypto.randomUUID();
+      const stateRef = existing?.stateRef ?? (
+        input.stateRequirement === "installation" ||
+        input.grantedCapabilities.includes("plugin.state.read")
+          ? this.ctx.exports.PluginStateDurableObject.getByName(JSON.stringify([
+            "plugin-state-v1",
+            "deployment",
+            targetId,
+            input.pluginId,
+            installationId,
+          ])).id.toString()
+          : undefined
+      );
       const installation: DeploymentPluginInstallationRecord = {
         schemaVersion: 1,
-        installationId: existing?.installationId ?? crypto.randomUUID(),
+        installationId,
         scope: "deployment",
         targetId,
         pluginId: input.pluginId,
@@ -225,7 +277,7 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
         enabled: true,
         grantedCapabilities: [...input.grantedCapabilities],
         config: existing?.config ?? null,
-        ...(existing?.stateRef === undefined ? {} : {stateRef: existing.stateRef}),
+        ...(stateRef === undefined ? {} : {stateRef}),
       };
       const sequence = this.storage.nextDeploymentPluginAuditSequence.get();
       const event: DeploymentPluginAuditEvent = {
@@ -247,9 +299,236 @@ export class AdminSettings extends DurableObject<Cloudflare.Env> {
       this.storage.deploymentPluginInstallations.put(installation);
       this.storage.deploymentPluginAuditEvents.put(event);
       this.storage.nextDeploymentPluginAuditSequence.put(sequence + 1);
-      installationId = installation.installationId;
+      result = {ok: true, installationId: installation.installationId};
     });
-    return {installationId};
+    return result;
+  }
+
+  /** Persists the revocation marker that linearizes a deployment uninstall. */
+  beginDeploymentPluginUninstall(
+      pluginId: string,
+      expectedInstallationId: string): BeginDeploymentPluginUninstallResult {
+    let result: BeginDeploymentPluginUninstallResult = {
+      ok: false,
+      error: "PLUGIN_NOT_INSTALLED",
+    };
+    this.ctx.storage.transactionSync(() => {
+      const exact = this.storage.deploymentPluginRevocations.get(expectedInstallationId);
+      if (exact?.pluginId === pluginId) {
+        result = {ok: true, installationId: expectedInstallationId};
+        return;
+      }
+      const installation = this.storage.deploymentPluginInstallations.get(pluginId);
+      if (installation === undefined) return;
+      if (installation.installationId !== expectedInstallationId) {
+        result = {ok: false, error: "INSTALLATION_CHANGED"};
+        return;
+      }
+      this.storage.deploymentPluginRevocations.put({
+        schemaVersion: 1,
+        installationId: installation.installationId,
+        pluginId: installation.pluginId,
+        ...(installation.stateRef === undefined ? {} : {stateRef: installation.stateRef}),
+        startedAt: Date.now(),
+      });
+      result = {ok: true, installationId: installation.installationId};
+    });
+    return result;
+  }
+
+  /** Removes revoked deployment desired state and detaches its state pointer exactly once. */
+  finalizeDeploymentPluginUninstall(
+      installationId: string,
+      actor: PluginMutationActor): FinalizeDeploymentPluginUninstallResult {
+    let result: FinalizeDeploymentPluginUninstallResult = {
+      ok: false,
+      error: "PLUGIN_NOT_INSTALLED",
+    };
+    this.ctx.storage.transactionSync(() => {
+      const revocation = this.storage.deploymentPluginRevocations.get(installationId);
+      if (revocation === undefined) return;
+      if (revocation.finalizedAt !== undefined) {
+        result = {
+          ok: true,
+          installationId,
+          retainedState: this.storage.detachedDeploymentPluginStates.get(installationId) !==
+            undefined,
+        };
+        return;
+      }
+      const installation = this.storage.deploymentPluginInstallations.get(revocation.pluginId);
+      if (installation?.installationId !== installationId) {
+        result = {ok: false, error: "UNINSTALL_IN_PROGRESS"};
+        return;
+      }
+      const detachedAt = Date.now();
+      if (installation.stateRef !== undefined) {
+        this.storage.detachedDeploymentPluginStates.put({
+          schemaVersion: 1,
+          installationId,
+          pluginId: installation.pluginId,
+          packageVersion: installation.packageVersion,
+          manifestDigest: installation.manifestDigest,
+          stateRef: installation.stateRef,
+          detachedAt,
+        });
+      }
+      const sequence = this.storage.nextDeploymentPluginAuditSequence.get();
+      this.storage.deploymentPluginAuditEvents.put({
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_UNINSTALLED",
+        actorUserId: actor.userId,
+        actorProfileId: actor.profileId,
+        authority: "admin",
+        scope: "deployment",
+        targetId: this.ctx.id.toString(),
+        installationId,
+        pluginId: installation.pluginId,
+        packageVersion: installation.packageVersion,
+        manifestDigest: installation.manifestDigest,
+        grantedCapabilities: [],
+        recordedAt: detachedAt,
+      });
+      this.storage.deploymentPluginInstallations.delete(installation.pluginId);
+      this.storage.deploymentPluginRevocations.put({...revocation, finalizedAt: detachedAt});
+      this.storage.nextDeploymentPluginAuditSequence.put(sequence + 1);
+      result = {
+        ok: true,
+        installationId,
+        retainedState: installation.stateRef !== undefined,
+      };
+    });
+    return result;
+  }
+
+  /** Lists host-only detached deployment state records including opaque references. */
+  async listDetachedDeploymentPluginStatesForHost():
+      Promise<DetachedDeploymentPluginStateRecord[]> {
+    return Array.from(this.storage.detachedDeploymentPluginStates.list());
+  }
+
+  /** Persists or resumes one deployment detached-state purge marker. */
+  beginDeploymentPluginStatePurge(
+      installationId: string): BeginDeploymentPluginStatePurgeResult {
+    let result: BeginDeploymentPluginStatePurgeResult = {
+      ok: false,
+      error: "DETACHED_PLUGIN_STATE_NOT_FOUND",
+    };
+    this.ctx.storage.transactionSync(() => {
+      const exact = this.storage.deploymentPluginStatePurges.get(installationId);
+      if (exact !== undefined) {
+        if (exact.phase === "FINALIZED") {
+          result = {ok: true, phase: "FINALIZED", installationId};
+          return;
+        }
+        result = {
+          ok: true,
+          phase: "PURGE_REQUIRED",
+          installationId,
+          stateRef: exact.stateRef,
+          owner: {
+            scope: "deployment",
+            targetId: this.ctx.id.toString(),
+            pluginId: exact.pluginId,
+            installationId,
+          },
+        };
+        return;
+      }
+      const detached = this.storage.detachedDeploymentPluginStates.get(installationId);
+      if (detached === undefined) return;
+      this.storage.deploymentPluginStatePurges.put({
+        schemaVersion: 1,
+        phase: "PENDING",
+        installationId,
+        pluginId: detached.pluginId,
+        packageVersion: detached.packageVersion,
+        manifestDigest: detached.manifestDigest,
+        stateRef: detached.stateRef,
+        startedAt: Date.now(),
+      });
+      result = {
+        ok: true,
+        phase: "PURGE_REQUIRED",
+        installationId,
+        stateRef: detached.stateRef,
+        owner: {
+          scope: "deployment",
+          targetId: this.ctx.id.toString(),
+          pluginId: detached.pluginId,
+          installationId,
+        },
+      };
+    });
+    return result;
+  }
+
+  /** Runs and resumes the deployment state purge saga without exposing its pointer. */
+  async purgeDeploymentPluginState(
+      installationId: string,
+      actor: PluginMutationActor): Promise<FinalizeDeploymentPluginStatePurgeResult> {
+    const begun = this.beginDeploymentPluginStatePurge(installationId);
+    if (!begun.ok) return begun;
+    if (begun.phase === "FINALIZED") {
+      return {ok: true, installationId: begun.installationId};
+    }
+    const states = this.ctx.exports.PluginStateDurableObject;
+    await states.get(states.idFromString(begun.stateRef)).purge(begun.owner);
+    return this.#finalizeDeploymentPluginStatePurge(begun.installationId, actor);
+  }
+
+  #finalizeDeploymentPluginStatePurge(
+      installationId: string,
+      actor: PluginMutationActor): FinalizeDeploymentPluginStatePurgeResult {
+    let result: FinalizeDeploymentPluginStatePurgeResult = {
+      ok: false,
+      error: "DETACHED_PLUGIN_STATE_NOT_FOUND",
+    };
+    this.ctx.storage.transactionSync(() => {
+      const purge = this.storage.deploymentPluginStatePurges.get(installationId);
+      if (purge === undefined) return;
+      if (purge.phase === "FINALIZED") {
+        result = {ok: true, installationId};
+        return;
+      }
+      const detached = this.storage.detachedDeploymentPluginStates.get(installationId);
+      if (
+        detached === undefined || detached.pluginId !== purge.pluginId ||
+        detached.stateRef !== purge.stateRef
+      ) return;
+      const purgedAt = Date.now();
+      const sequence = this.storage.nextDeploymentPluginAuditSequence.get();
+      this.storage.deploymentPluginAuditEvents.put({
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_STATE_PURGED",
+        actorUserId: actor.userId,
+        actorProfileId: actor.profileId,
+        authority: "admin",
+        scope: "deployment",
+        targetId: this.ctx.id.toString(),
+        installationId,
+        pluginId: detached.pluginId,
+        packageVersion: detached.packageVersion,
+        manifestDigest: detached.manifestDigest,
+        grantedCapabilities: [],
+        recordedAt: purgedAt,
+      });
+      this.storage.detachedDeploymentPluginStates.delete(installationId);
+      this.storage.deploymentPluginStatePurges.put({
+        schemaVersion: 1,
+        phase: "FINALIZED",
+        installationId,
+        pluginId: purge.pluginId,
+        packageVersion: purge.packageVersion,
+        manifestDigest: purge.manifestDigest,
+        purgedAt,
+      });
+      this.storage.nextDeploymentPluginAuditSequence.put(sequence + 1);
+      result = {ok: true, installationId};
+    });
+    return result;
   }
 
   // Install the format blueprints bundled with this deployment, if that hasn't already happened
@@ -737,6 +1016,7 @@ export class AdminApiImpl extends RpcTarget implements AdminApi {
       private admin: DurableObjectStub<AdminSettings>,
       private actor: PluginMutationActor,
       private pluginManifests: Promise<PluginManifestResolver>,
+      private pluginStore: DurableObjectStub<PluginStoreDurableObject>,
   ) {
     super();
   }
@@ -753,14 +1033,51 @@ export class AdminApiImpl extends RpcTarget implements AdminApi {
     if (isUserOnlyPluginManifest(manifest)) {
       return {ok: false, error: "PLUGIN_SCOPE_NOT_SUPPORTED"};
     }
-    const {installationId} = await this.admin.putDeploymentPluginInstallation({
+    const persisted = await this.admin.putDeploymentPluginInstallation({
       pluginId: manifest.pluginId,
       packageVersion: manifest.packageVersion,
       manifestDigest: manifest.manifestDigest,
       grantedCapabilities: [...manifest.requestedCapabilities],
+      stateRequirement: manifest.state?.kind ?? "none",
       actor: this.actor,
     });
-    return {ok: true, installationId};
+    return persisted;
+  }
+
+  async uninstallDeploymentPlugin(
+      request: UninstallDeploymentPluginRequest): Promise<UninstallDeploymentPluginResult> {
+    const begun = await this.admin.beginDeploymentPluginUninstall(
+      request.pluginId,
+      request.expectedInstallationId,
+    );
+    if (!begun.ok) return begun;
+    return this.admin.finalizeDeploymentPluginUninstall(begun.installationId, this.actor);
+  }
+
+  async listDetachedDeploymentPluginStates():
+      Promise<DetachedDeploymentPluginStateSummary[]> {
+    const records = await this.admin.listDetachedDeploymentPluginStatesForHost();
+    return records.map(record => ({
+      installationId: record.installationId,
+      pluginId: record.pluginId,
+      packageVersion: record.packageVersion,
+      detachedAt: record.detachedAt,
+    }));
+  }
+
+  async purgeDeploymentPluginState(
+      request: PurgeDeploymentPluginStateRequest): Promise<PurgeDeploymentPluginStateResult> {
+    return this.admin.purgeDeploymentPluginState(request.installationId, this.actor);
+  }
+
+  async approvePluginStoreCandidate(candidateId: string): Promise<{
+    ok: true;
+    candidateId: string;
+  } | {
+    ok: false;
+    error: "CANDIDATE_NOT_FOUND" | "PLUGIN_VERSION_ALREADY_PUBLISHED";
+  }> {
+    return this.pluginStore.approveAndPublish(candidateId, this.actor);
   }
 
   async denyPluginManifest(manifestDigest: string): Promise<{

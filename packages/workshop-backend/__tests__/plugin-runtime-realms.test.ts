@@ -7,6 +7,7 @@ import {
   PluginRuntimeRealms,
   type PluginRuntimeRealm,
 } from "../src/plugin-runtime-realms.js";
+import type { PluginRuntimeStatusView } from "@gadgets/workshop-shared/api";
 
 const LOCATOR: PluginRuntimeRealmLocator = {
   overseerId: "workspace-a",
@@ -27,10 +28,33 @@ class FakeRealm implements PluginRuntimeRealm {
   invocationError?: Error;
   removedRevoked: Array<{pluginId: string; manifestDigest: string}> = [];
   stagedDenials = 0;
+  runtimeFailures: string[] = [];
+  status: PluginRuntimeStatusView = {
+    outcome: "ready",
+    states: [],
+    observedAt: 1,
+  };
 
   async refresh(): Promise<void> {
     this.refreshes += 1;
     if (this.refreshError) throw this.refreshError;
+  }
+
+  getStatus(): PluginRuntimeStatusView {
+    return structuredClone(this.status);
+  }
+
+  recordRuntimeFailure(pluginId: string): void {
+    this.runtimeFailures.push(pluginId);
+    this.status = {
+      outcome: "ready",
+      states: [{
+        pluginId,
+        status: "failed",
+        reason: "RUNTIME_INVOCATION_FAILED",
+      }],
+      observedAt: 2,
+    };
   }
 
   revokeAll(): void {
@@ -129,6 +153,7 @@ describe("plugin runtime realms", () => {
     const second = await realms.acquire(LOCATOR);
     expect(created).toHaveLength(1);
     expect(created[0]?.refreshes).toBe(2);
+    expect(first.getStatus()).toEqual(created[0]?.status);
 
     first.release();
     expect(created[0]?.active).toBe(true);
@@ -245,6 +270,7 @@ describe("plugin runtime realms", () => {
     );
 
     const failed = await realms.acquire(LOCATOR);
+    expect(failed.getStatus()).toMatchObject({outcome: "refresh-failed", states: []});
     failed.release();
     const recovered = await realms.acquire(LOCATOR);
 
@@ -330,6 +356,14 @@ describe("plugin runtime realms", () => {
       "example.runtime",
     )).rejects.toThrow("Plugin invocation timed out");
 
+    expect(realm.runtimeFailures).toEqual(["example.runtime"]);
+    expect(session.getStatus()).toMatchObject({
+      states: [{
+        pluginId: "example.runtime",
+        status: "failed",
+        reason: "RUNTIME_INVOCATION_FAILED",
+      }],
+    });
     expect(realm.active).toBe(false);
     expect(tracked).toHaveLength(1);
     await tracked[0];

@@ -676,4 +676,49 @@ describe("authenticated user plugin installation", () => {
       })]),
     });
   });
+
+  it("enforces durable user concurrency and per-plugin frequency before UI worker startup", async () => {
+    using publicApi = await connect();
+    const account = await createAccount(publicApi, "pluginuilimits");
+    using authenticated = await publicApi.authenticate(account.token);
+    const installed = await authenticated.installUserPlugin({
+      pluginId: "test.ui-center",
+      packageVersion: "1.0.0",
+      approvedCapabilities: [],
+    });
+    if (!installed.ok) throw new Error("Expected UI plugin installation.");
+    const owner = exports.UserDurableObject.getByName(account.username);
+    const activeClaims = [];
+    for (let index = 0; index < 4; index += 1) {
+      const claim = await owner.beginUserPluginUiExecution("test.ui-center");
+      expect(claim.ok).toBe(true);
+      if (claim.ok) activeClaims.push(claim);
+    }
+
+    await expect(authenticated.openUserPluginUiFrame({
+      pluginId: "test.ui-center",
+      expectedInstallationId: installed.installationId,
+      contributionId: "sandbox",
+    })).resolves.toEqual({ok: false, error: "PLUGIN_UI_BUSY"});
+    for (const claim of activeClaims) {
+      await owner.finishUserPluginUiExecution(claim.leaseId);
+    }
+
+    // The four accepted concurrent claims count toward the same 30-per-minute plugin window.
+    for (let index = 4; index < 30; index += 1) {
+      const claim = await owner.beginUserPluginUiExecution("test.ui-center");
+      if (!claim.ok) throw new Error("Expected available UI rate slot.");
+      await owner.finishUserPluginUiExecution(claim.leaseId);
+    }
+    await expect(authenticated.openUserPluginUiFrame({
+      pluginId: "test.ui-center",
+      expectedInstallationId: installed.installationId,
+      contributionId: "sandbox",
+    })).resolves.toEqual({ok: false, error: "PLUGIN_UI_RATE_LIMITED"});
+
+    await abortAllDurableObjects();
+    await expect(exports.UserDurableObject.getByName(account.username)
+      .beginUserPluginUiExecution("test.ui-center"))
+      .resolves.toEqual({ok: false, error: "RATE_LIMIT"});
+  });
 });

@@ -11,10 +11,16 @@ interface PluginStateValue {
 }
 
 const MAX_PLUGIN_STATE_VALUE_BYTES = 64 * 1024;
+const MAX_PLUGIN_STATE_CELL_COUNT = 64;
+const MAX_PLUGIN_STATE_TOTAL_VALUE_BYTES = 256 * 1024;
+
+function pluginStateValueBytes(value: PluginConfigurationValue): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
 
 function decodePluginStateValue(value: unknown): PluginConfigurationValue {
   const decoded = decodePluginConfigurationValue(value);
-  if (new TextEncoder().encode(JSON.stringify(decoded)).byteLength > MAX_PLUGIN_STATE_VALUE_BYTES) {
+  if (pluginStateValueBytes(decoded) > MAX_PLUGIN_STATE_VALUE_BYTES) {
     throw new RangeError("Plugin state value exceeds the size limit.");
   }
   return decoded;
@@ -74,7 +80,8 @@ export class PluginStateDurableObject extends DurableObject<Cloudflare.Env> {
       nextValue: unknown,
       mutationId?: string,
   ): {ok: true; revision: number; replayed: boolean} |
-    {ok: false; currentRevision: number} {
+    {ok: false; currentRevision: number} |
+    {ok: false; currentRevision: number; error: "CELL_QUOTA_EXCEEDED" | "BYTE_QUOTA_EXCEEDED"} {
     if (key.length === 0 || key.length > 128) throw new RangeError("Invalid plugin state key.");
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
       throw new RangeError("Invalid plugin state revision.");
@@ -85,10 +92,14 @@ export class PluginStateDurableObject extends DurableObject<Cloudflare.Env> {
     ) throw new RangeError("Invalid plugin state mutation ID.");
     const decoded = decodePluginStateValue(nextValue);
     let result: {ok: true; revision: number; replayed: boolean} |
-      {ok: false; currentRevision: number} = {
+      {ok: false; currentRevision: number} |
+      {ok: false; currentRevision: number; error: "CELL_QUOTA_EXCEEDED" |
+        "BYTE_QUOTA_EXCEEDED"} = {
       ok: false,
       currentRevision: 0,
     };
+    let quotaError: string | undefined;
+    let quotaCurrentRevision = 0;
     this.ctx.storage.transactionSync(() => {
       this.#assertOwner(owner);
       if (this.#storage.purged.get()) throw new Error("Plugin state was purged.");
@@ -102,6 +113,11 @@ export class PluginStateDurableObject extends DurableObject<Cloudflare.Env> {
         result = {ok: false, currentRevision};
         return;
       }
+      quotaError = this.#writeQuotaError(current, decoded);
+      if (quotaError !== undefined) {
+        quotaCurrentRevision = currentRevision;
+        return;
+      }
       const revision = currentRevision + 1;
       const recentMutationIds = mutationId === undefined
         ? current?.recentMutationIds ?? []
@@ -109,21 +125,57 @@ export class PluginStateDurableObject extends DurableObject<Cloudflare.Env> {
       this.#storage.values.put({key, revision, value: decoded, recentMutationIds});
       result = {ok: true, revision, replayed: false};
     });
+    if (quotaError !== undefined) {
+      return {
+        ok: false,
+        currentRevision: quotaCurrentRevision,
+        error: quotaError.startsWith("Plugin state cell")
+          ? "CELL_QUOTA_EXCEEDED"
+          : "BYTE_QUOTA_EXCEEDED",
+      };
+    }
     return result;
   }
 
   /** Seeds bounded state only for trusted host tests and future host-owned migration tooling. */
   putForHost(owner: PluginStateOwner, key: string, value: unknown): void {
     if (key.length === 0 || key.length > 128) throw new RangeError("Invalid plugin state key.");
+    const decoded = decodePluginStateValue(value);
+    let quotaError: string | undefined;
+    this.ctx.storage.transactionSync(() => {
+      this.#assertOwner(owner);
+      if (this.#storage.purged.get()) throw new Error("Plugin state was purged.");
+      const current = this.#storage.values.get(key);
+      quotaError = this.#writeQuotaError(current, decoded);
+      if (quotaError !== undefined) return;
+      this.#storage.values.put({
+        key,
+        revision: (current?.revision ?? 0) + 1,
+        value: decoded,
+        recentMutationIds: current?.recentMutationIds ?? [],
+      });
+    });
+    if (quotaError !== undefined) throw new Error(quotaError);
+  }
+
+  /** Reports bounded installation usage without exposing stored values. */
+  readUsageForHost(owner: PluginStateOwner): {
+    cellCount: number;
+    valueBytes: number;
+    maxCellCount: number;
+    maxValueBytes: number;
+    maxTotalValueBytes: number;
+  } {
     this.#assertOwner(owner);
     if (this.#storage.purged.get()) throw new Error("Plugin state was purged.");
-    const current = this.#storage.values.get(key);
-    this.#storage.values.put({
-      key,
-      revision: (current?.revision ?? 0) + 1,
-      value: decodePluginStateValue(value),
-      recentMutationIds: current?.recentMutationIds ?? [],
-    });
+    const values = Array.from(this.#storage.values.list());
+    return {
+      cellCount: values.length,
+      valueBytes: values.reduce((total, entry) => total + pluginStateValueBytes(entry.value), 0),
+      maxCellCount: MAX_PLUGIN_STATE_CELL_COUNT,
+      maxValueBytes: MAX_PLUGIN_STATE_VALUE_BYTES,
+      maxTotalValueBytes: MAX_PLUGIN_STATE_TOTAL_VALUE_BYTES,
+    };
   }
 
   /** Permanently erases values while retaining immutable owner and purged tombstones. */
@@ -160,5 +212,23 @@ export class PluginStateDurableObject extends DurableObject<Cloudflare.Env> {
     } else if (!ownersEqual(current, owner)) {
       throw new Error("Plugin state owner mismatch.");
     }
+  }
+
+  #writeQuotaError(
+      current: PluginStateValue | undefined,
+      nextValue: PluginConfigurationValue): string | undefined {
+    const values = Array.from(this.#storage.values.list());
+    if (current === undefined && values.length >= MAX_PLUGIN_STATE_CELL_COUNT) {
+      return "Plugin state cell quota exceeded.";
+    }
+    const currentBytes = current === undefined ? 0 : pluginStateValueBytes(current.value);
+    const totalBytes = values.reduce(
+      (total, entry) => total + pluginStateValueBytes(entry.value),
+      0,
+    ) - currentBytes + pluginStateValueBytes(nextValue);
+    if (totalBytes > MAX_PLUGIN_STATE_TOTAL_VALUE_BYTES) {
+      return "Plugin state byte quota exceeded.";
+    }
+    return undefined;
   }
 }

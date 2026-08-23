@@ -8,6 +8,21 @@ import type {
   PluginRuntimeGateClaim,
   PluginStagedInstallationAuthority,
 } from "./plugin-capability-gate.js";
+import type { PluginRuntimeStatusView } from "@gadgets/workshop-shared/api";
+
+/** Append-only operator record for one realm reconciliation or runtime failure. */
+export interface PluginRuntimeAuditEvent {
+  schemaVersion: 1;
+  sequence: number;
+  action:
+    "PLUGIN_RUNTIME_RECONCILED" |
+    "PLUGIN_RUNTIME_REFRESH_FAILED" |
+    "PLUGIN_RUNTIME_INVOCATION_FAILED";
+  realmUserId: string;
+  realmRole: "build" | "use";
+  status: PluginRuntimeStatusView;
+  recordedAt: number;
+}
 
 /** Exact host gate plus the opaque reconciler lease epoch selected behind it. */
 export interface PluginRuntimeLeaseClaim extends PluginRuntimeGateClaim {
@@ -19,6 +34,12 @@ export interface PluginRuntimeLeaseClaim extends PluginRuntimeGateClaim {
 export interface PluginRuntimeRealm {
   /** Refreshes desired state without replacing it with empty state when an upstream read fails. */
   refresh(): Promise<void>;
+
+  /** Returns only the safe reconciler projection for this realm. */
+  getStatus(): PluginRuntimeStatusView;
+
+  /** Records a failed invocation before the matching active claim is revoked. */
+  recordRuntimeFailure(pluginId: string): void;
 
   /** Synchronously denies staged and active authority before asynchronous teardown. */
   revokeAll(): void;
@@ -85,6 +106,9 @@ export interface PluginRuntimeRealm {
 
 /** Reference-counted session ownership returned without exposing the underlying realm. */
 export interface PluginRuntimeRealmSession {
+  /** Returns only the safe reconciler projection for this authenticated session. */
+  getStatus(): PluginRuntimeStatusView;
+
   /** Releases this session once; the final release synchronously revokes the realm. */
   release(): void;
 }
@@ -120,7 +144,14 @@ export class PluginRuntimeRealms {
         realm = this.createRealm(snapshot);
       } catch (error) {
         this.#report(error);
-        return {release: () => {}};
+        return {
+          getStatus: () => ({
+            outcome: "refresh-failed",
+            states: [],
+            observedAt: Date.now(),
+          }),
+          release: () => {},
+        };
       }
       entry = {
         identity: snapshot,
@@ -142,6 +173,7 @@ export class PluginRuntimeRealms {
 
     let released = false;
     return {
+      getStatus: () => structuredClone(entry.realm.getStatus()),
       release: () => {
         if (released) return;
         released = true;
@@ -243,6 +275,7 @@ export class PluginRuntimeRealms {
       await entry.realm.assertWorkspaceMetadataCapability(pluginId);
     } catch (error) {
       if (claim !== undefined) {
+        entry.realm.recordRuntimeFailure(pluginId);
         this.#denyEntryClaim(
           this.#key(identity),
           entry,

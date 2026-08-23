@@ -55,6 +55,7 @@ import { useWorkspaceOpen } from './useWorkspaceOpen'
 import { reportIssue } from './errorReporting'
 import GadgetExportMenu from './GadgetExportMenu'
 import { useToasts } from './useToasts'
+import PluginRuntimeStatusIndicator from './PluginRuntimeStatusIndicator'
 
 const NO_GADGETS: ReadonlySet<WorkpieceId> = new Set()
 
@@ -1397,6 +1398,8 @@ export default function GadgetEditor() {
 
         {/* Right: presence, cost, workspace, share, blueprints */}
         <div className="flex items-center gap-1 flex-shrink-0">
+          <PluginRuntimeStatusIndicator overseer={overseer.stub} />
+
           <GadgetPresence
             overseer={overseer.stub}
             authenticatedApi={authenticatedApi}

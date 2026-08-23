@@ -19,10 +19,18 @@ import type { VerifyingPluginCodeArtifactResolver } from "./plugin-code-artifact
 import type { PluginManifestResolver } from "./plugin-manifest-registry.js";
 import { PluginReconciler, type RuntimePluginPlan } from "./plugin-reconciler.js";
 import type {
+  PluginReconciliationResult,
+  RuntimePluginIdentity,
+} from "./plugin-reconciler.js";
+import type {
   PluginRuntimeLeaseClaim,
   PluginRuntimeRealm,
 } from "./plugin-runtime-realms.js";
 import { buildRuntimePluginPlans } from "./plugin-runtime-plan.js";
+import type {
+  PluginRuntimeStateView,
+  PluginRuntimeStatusView,
+} from "@gadgets/workshop-shared/api";
 
 /** Atomic trusted control snapshot read before one realm reconciliation pass. */
 export interface PluginRuntimeControlSnapshot {
@@ -58,6 +66,29 @@ export interface ReconciledPluginRuntimeRealmOptions {
 
   /** Wall-clock ceiling for the cross-DO desired-state snapshot read. */
   readonly refreshTimeoutMs?: number;
+
+  /** Persists or emits a safe status transition without receiving runtime authority. */
+  readonly recordStatus?: (
+    action:
+      "PLUGIN_RUNTIME_RECONCILED" |
+      "PLUGIN_RUNTIME_REFRESH_FAILED" |
+      "PLUGIN_RUNTIME_INVOCATION_FAILED",
+    status: PluginRuntimeStatusView,
+  ) => void;
+}
+
+function activeState(active: RuntimePluginIdentity): PluginRuntimeStateView {
+  return {pluginId: active.pluginId, status: "active", active: structuredClone(active)};
+}
+
+function projectResult(result: PluginReconciliationResult): PluginRuntimeStatusView {
+  return {
+    outcome: result.ok ? "ready" : "conflict",
+    states: result.ok
+      ? structuredClone(result.states)
+      : result.active.map(activeState),
+    observedAt: Date.now(),
+  };
 }
 
 async function withinDeadline<T>(
@@ -86,6 +117,11 @@ export class ReconciledPluginRuntimeRealm implements PluginRuntimeRealm {
   readonly #reconciler: PluginReconciler<CordisPluginRuntimeLease>;
   #refreshTail = Promise.resolve();
   readonly #refreshTimeoutMs: number;
+  #lastStatus: PluginRuntimeStatusView = {
+    outcome: "ready",
+    states: [],
+    observedAt: Date.now(),
+  };
 
   /** Constructs an empty runtime projection without reading or mutating desired state. */
   constructor(private options: ReconciledPluginRuntimeRealmOptions) {
@@ -104,9 +140,55 @@ export class ReconciledPluginRuntimeRealm implements PluginRuntimeRealm {
   }
 
   async refresh(): Promise<void> {
-    const run = this.#refreshTail.then(() => this.#applyDesiredState());
+    const run = this.#refreshTail.then(async () => {
+      try {
+        const result = await this.#applyDesiredState();
+        this.#setStatus("PLUGIN_RUNTIME_RECONCILED", projectResult(result));
+      } catch (error) {
+        this.#setStatus("PLUGIN_RUNTIME_REFRESH_FAILED", {
+          outcome: "refresh-failed",
+          states: structuredClone(this.#lastStatus.states),
+          observedAt: Date.now(),
+        });
+        throw error;
+      }
+    });
     this.#refreshTail = run.then(() => undefined, () => undefined);
     await run;
+  }
+
+  getStatus(): PluginRuntimeStatusView {
+    return structuredClone(this.#lastStatus);
+  }
+
+  recordRuntimeFailure(pluginId: string): void {
+    const authority = this.#gates.activeClaim(pluginId);
+    const installation = authority === undefined ? undefined :
+      this.activeInstallationAuthority(
+        pluginId,
+        authority.activationKey,
+        authority.manifestDigest,
+      )?.installation;
+    const failed: PluginRuntimeStateView = {
+      pluginId,
+      status: "failed",
+      ...(installation === undefined ? {} : {candidate: {
+        installationId: installation.installationId,
+        pluginId: installation.pluginId,
+        packageVersion: installation.packageVersion,
+        manifestDigest: installation.manifestDigest,
+      }}),
+      reason: "RUNTIME_INVOCATION_FAILED",
+    };
+    const states = this.#lastStatus.states
+      .filter(state => state.pluginId !== pluginId)
+      .concat(failed)
+      .toSorted((a, b) => a.pluginId < b.pluginId ? -1 : a.pluginId > b.pluginId ? 1 : 0);
+    this.#setStatus("PLUGIN_RUNTIME_INVOCATION_FAILED", {
+      outcome: "ready",
+      states,
+      observedAt: Date.now(),
+    });
   }
 
   revokeAll(): void {
@@ -209,7 +291,7 @@ export class ReconciledPluginRuntimeRealm implements PluginRuntimeRealm {
     await this.#reconciler.invalidateActive(pluginId, leaseEpoch);
   }
 
-  async #applyDesiredState(): Promise<void> {
+  async #applyDesiredState(): Promise<PluginReconciliationResult> {
     // The deadline covers only the side-effect-free cross-DO snapshot read. A late read result has
     // no continuation and therefore cannot race a later refresh or mutate the reconciler.
     const control = await withinDeadline(
@@ -219,14 +301,24 @@ export class ReconciledPluginRuntimeRealm implements PluginRuntimeRealm {
     await this.#reconciler.denyManifests(control.deniedManifestDigests);
     const effective = resolveEffectivePluginConfiguration(control.desiredState);
     if (!effective.ok) {
-      await this.#reconciler.reconcile(effective);
-      return;
+      return this.#reconciler.reconcile(effective);
     }
     const plans = await buildRuntimePluginPlans(
       effective.installations,
       await this.options.manifests,
       control.deniedManifestDigests,
     );
-    await this.#reconciler.reconcile({ok: true, ...plans});
+    return this.#reconciler.reconcile({ok: true, ...plans});
+  }
+
+  #setStatus(
+      action: Parameters<NonNullable<ReconciledPluginRuntimeRealmOptions["recordStatus"]>>[0],
+      status: PluginRuntimeStatusView): void {
+    this.#lastStatus = structuredClone(status);
+    try {
+      this.options.recordStatus?.(action, structuredClone(status));
+    } catch {
+      // Status diagnostics cannot change or restore runtime authority.
+    }
   }
 }

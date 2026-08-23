@@ -78,6 +78,21 @@ describe('PluginSurfacePage', () => {
     }]
   })
 
+  it('shows a retryable rate-limit error without treating the installation as unavailable', async () => {
+    mocks.interact.mockResolvedValue({ok: false, error: 'PLUGIN_UI_RATE_LIMITED'})
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => root!.render(React.createElement(PluginSurfacePage, {
+      pluginId: 'circle.personal-kanban',
+      contributionId: 'board',
+    })))
+    await flush()
+
+    expect(container.textContent).toContain('per-minute limit')
+    expect(container.textContent).not.toContain('no longer available')
+  })
+
   it('renders the generic columns and forwards create and move actions to the plugin reducer', async () => {
     mocks.interact.mockImplementation(async request => {
       if (request.interaction.kind === 'open') {

@@ -41,10 +41,13 @@ import {
   decodePluginConfigurationValue,
   resolveApprovedPluginManifest,
 } from "./plugin-installation.js";
-import { bundledPluginManifestResolver } from "./bundled-plugin-manifests.js";
 import { PluginStateDurableObject } from "./plugin-state.js";
+import { PluginStoreDurableObject } from "./plugin-store.js";
 import { buildUserPluginCenterView } from "./user-plugin-center.js";
-import { bundledPluginCodeArtifactResolver } from "./bundled-plugin-artifacts.js";
+import {
+  createPluginStoreCodeArtifactResolver,
+  createPluginStoreManifestCatalog,
+} from "./plugin-store-resolvers.js";
 import { openUserPluginUiFrame } from "./open-user-plugin-ui-frame.js";
 import {
   DynamicWorkerPluginUiRenderer,
@@ -93,6 +96,9 @@ export { PluginRuntimeLoopback, PluginStateReadCapability, PluginWorkspaceMetada
 // Re-export generic installation state reached only through host-owned capability facades.
 export { PluginStateDurableObject };
 
+// Re-export the deployment Store reached only through trusted host and admin boundaries.
+export { PluginStoreDurableObject };
+
 // Re-export service-binding entrypoint for external channel integrations.
 export { ExternalMessageGateway };
 
@@ -123,6 +129,26 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   private overseers: DurableObjectNamespace<OverseerDurableObject>;
   private adminSettings: DurableObjectNamespace<AdminSettings>;
   private users: DurableObjectNamespace<UserDurableObject>;
+
+  async #runBoundedPluginUi<T>(
+      pluginId: string,
+      operation: () => Promise<T>): Promise<
+        {ok: true; value: T} |
+        {ok: false; error: "PLUGIN_UI_BUSY" | "PLUGIN_UI_RATE_LIMITED"}
+      > {
+    const claim = await this.user.beginUserPluginUiExecution(pluginId);
+    if (!claim.ok) {
+      return {
+        ok: false,
+        error: claim.error === "RATE_LIMIT" ? "PLUGIN_UI_RATE_LIMITED" : "PLUGIN_UI_BUSY",
+      };
+    }
+    try {
+      return {ok: true, value: await operation()};
+    } finally {
+      await this.user.finishUserPluginUiExecution(claim.leaseId).catch(() => {});
+    }
+  }
 
   #isAdmin(): boolean {
     let name = this.user.id.name;
@@ -204,16 +230,32 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     const adminSettings = this.adminSettings.getByName("");
     const renderer = new DynamicWorkerPluginUiRenderer(
       new WorkerLoaderPluginUiWorkerStarter(this.env.LOADER),
-      bundledPluginCodeArtifactResolver,
+      createPluginStoreCodeArtifactResolver(
+        this.ctx.exports.PluginStoreDurableObject.getByName(""),
+      ),
     );
-    return openUserPluginUiFrame(request, {
+    let executionFailure: "PLUGIN_UI_BUSY" | "PLUGIN_UI_RATE_LIMITED" | undefined;
+    const result = await openUserPluginUiFrame(request, {
       readInstallation: (pluginId, installationId) =>
         this.user.readUserPluginUiInstallationForHost(pluginId, installationId),
       resolveManifest: (pluginId, packageVersion) => catalog.resolve(pluginId, packageVersion),
       isManifestDenied: manifestDigest =>
         adminSettings.isPluginManifestDeniedForRuntimeHost(manifestDigest),
-      renderArtifact: codeArtifactDigest => renderer.render(codeArtifactDigest),
+      renderArtifact: async codeArtifactDigest => {
+        const execution = await this.#runBoundedPluginUi(
+          request.pluginId,
+          () => renderer.render(codeArtifactDigest),
+        );
+        if (!execution.ok) {
+          executionFailure = execution.error;
+          return null;
+        }
+        return execution.value;
+      },
     });
+    return !result.ok && result.error === "PLUGIN_UI_NOT_AVAILABLE" && executionFailure !== undefined
+      ? {ok: false, error: executionFailure}
+      : result;
   }
   async listUserPluginNavigation(): Promise<UserPluginNavigationEntry[]> {
     const [catalog, owner] = await Promise.all([
@@ -234,9 +276,12 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     const adminSettings = this.adminSettings.getByName("");
     const renderer = new DynamicWorkerInteractivePluginUi(
       new WorkerLoaderInteractivePluginUiStarter(this.env.LOADER),
-      bundledPluginCodeArtifactResolver,
+      createPluginStoreCodeArtifactResolver(
+        this.ctx.exports.PluginStoreDurableObject.getByName(""),
+      ),
     );
-    return interactUserPluginSurface(request, {
+    let executionFailure: "PLUGIN_UI_BUSY" | "PLUGIN_UI_RATE_LIMITED" | undefined;
+    const result = await interactUserPluginSurface(request, {
       userId: this.user.id.toString(),
       readInstallation: (pluginId, installationId) =>
         this.user.readUserPluginInteractiveInstallationForHost(pluginId, installationId),
@@ -244,20 +289,32 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       isManifestDenied: digest =>
         adminSettings.isPluginManifestDeniedForRuntimeHost(digest),
       readState: async (installation, key) => {
-        const result = await this.user.readUserPluginInteractiveStateForHost(
+        const stateResult = await this.user.readUserPluginInteractiveStateForHost(
           installation.pluginId,
           installation.installationId,
           key,
         );
-        if (typeof result !== "object" || result === null || Array.isArray(result)) return null;
-        const revision = Reflect.get(result, "revision");
+        if (
+          typeof stateResult !== "object" || stateResult === null || Array.isArray(stateResult)
+        ) return null;
+        const revision = Reflect.get(stateResult, "revision");
         if (!Number.isSafeInteger(revision) || (revision as number) < 0) return null;
         return {
           revision: revision as number,
-          value: decodePluginConfigurationValue(Reflect.get(result, "value")),
+          value: decodePluginConfigurationValue(Reflect.get(stateResult, "value")),
         };
       },
-      runArtifact: (digest, interaction) => renderer.interact(digest, interaction),
+      runArtifact: async (digest, interaction) => {
+        const execution = await this.#runBoundedPluginUi(
+          request.pluginId,
+          () => renderer.interact(digest, interaction),
+        );
+        if (!execution.ok) {
+          executionFailure = execution.error;
+          return null;
+        }
+        return execution.value;
+      },
       compareAndSetState: (installation, key, revision, value, mutationId) =>
         this.user.compareAndSetUserPluginInteractiveStateForHost(
           installation,
@@ -267,6 +324,9 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
           mutationId,
         ),
     });
+    return !result.ok && result.error === "PLUGIN_UI_NOT_AVAILABLE" && executionFailure !== undefined
+      ? {ok: false, error: executionFailure}
+      : result;
   }
   setOwnDisplayName(name: string): Promise<void> {
     return this.user.setOwnDisplayName(name);
@@ -788,7 +848,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     return new AdminApiImpl(this.adminSettings.getByName(""), {
       userId: this.user.id.toString(),
       profileId: adminProfileId,
-    }, this.pluginManifests);
+    }, this.pluginManifests, this.ctx.exports.PluginStoreDurableObject.getByName(""));
   }
 
   async submitBugReport(report: BugReportInput): Promise<BugReportResult> {
@@ -1104,8 +1164,11 @@ export default {
         resp?.webSocket?.close();
       };
 
+      const pluginManifests = Promise.resolve(createPluginStoreManifestCatalog(
+        ctx.exports.PluginStoreDurableObject.getByName(""),
+      ));
       resp = await newWorkersRpcResponse(req,
-          new PublicApiImpl(ctx, env, abortSession, bundledPluginManifestResolver, accessPayload));
+          new PublicApiImpl(ctx, env, abortSession, pluginManifests, accessPayload));
 
       if (aborted) {
         // Oops, we missed the abortSession() call while awaiting, apply now.

@@ -83,6 +83,31 @@ type InteractivePluginStateStub = Pick<
   "readVersioned" | "compareAndSetForHost"
 >;
 
+const PLUGIN_UI_MAX_CONCURRENT_EXECUTIONS = 4;
+const PLUGIN_UI_RATE_LIMIT = 30;
+const PLUGIN_UI_RATE_WINDOW_MS = 60_000;
+const PLUGIN_UI_EXECUTION_LEASE_MS = 30_000;
+const PLUGIN_UI_MAX_TRACKED_RATE_KEYS = 256;
+
+interface PluginUiExecutionLeaseRecord {
+  leaseId: string;
+  pluginId: string;
+  expiresAt: number;
+}
+
+interface PluginUiRateWindowRecord {
+  pluginId: string;
+  timestamps: number[];
+}
+
+export type PluginUiExecutionClaimResult = {
+  ok: true;
+  leaseId: string;
+} | {
+  ok: false;
+  error: "CONCURRENT_LIMIT" | "RATE_LIMIT";
+};
+
 function areCredentialsValid(record: ConnectedAccountRecord): boolean {
   if (record.credentialsExpired) return false;
   if (record.credentialExpiresAt && record.credentialExpiresAt.valueOf() < Date.now()) return false;
@@ -216,6 +241,12 @@ function makeUserStorage(storage: DurableObjectStorage) {
       }),
       pluginStatePurges: collection<UserPluginStatePurge>()({
         primaryKey: "installationId",
+      }),
+      pluginUiExecutionLeases: collection<PluginUiExecutionLeaseRecord>()({
+        primaryKey: "leaseId",
+      }),
+      pluginUiRateWindows: collection<PluginUiRateWindowRecord>()({
+        primaryKey: "pluginId",
       }),
       gadgets: collection<GadgetRecord>()({
         primaryKey: "id"
@@ -982,6 +1013,71 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     };
   }
 
+  /**
+   * Atomically reserves one user-wide execution lease and one plugin sliding-window slot. Expired
+   * leases make crashes self-healing; persisted windows keep the rate bound across isolate restarts.
+   */
+  beginUserPluginUiExecution(pluginId: string): PluginUiExecutionClaimResult {
+    let result: PluginUiExecutionClaimResult = {ok: false, error: "CONCURRENT_LIMIT"};
+    this.ctx.storage.transactionSync(() => {
+      const now = Date.now();
+      const active: PluginUiExecutionLeaseRecord[] = [];
+      for (const lease of Array.from(this.storage.pluginUiExecutionLeases.list())) {
+        if (lease.expiresAt <= now) {
+          this.storage.pluginUiExecutionLeases.delete(lease.leaseId);
+        } else {
+          active.push(lease);
+        }
+      }
+      if (active.length >= PLUGIN_UI_MAX_CONCURRENT_EXECUTIONS) return;
+
+      let timestamps: number[] = [];
+      let trackedRateKeys = 0;
+      let hadCurrentWindow = false;
+      for (const window of Array.from(this.storage.pluginUiRateWindows.list())) {
+        const recent = window.timestamps.filter(
+          timestamp => now - timestamp < PLUGIN_UI_RATE_WINDOW_MS,
+        );
+        if (recent.length === 0) {
+          this.storage.pluginUiRateWindows.delete(window.pluginId);
+          continue;
+        }
+        trackedRateKeys += 1;
+        if (window.pluginId === pluginId) {
+          hadCurrentWindow = true;
+          timestamps = recent;
+        }
+        if (recent.length !== window.timestamps.length) {
+          this.storage.pluginUiRateWindows.put({...window, timestamps: recent});
+        }
+      }
+      if (!hadCurrentWindow && trackedRateKeys >= PLUGIN_UI_MAX_TRACKED_RATE_KEYS) {
+        result = {ok: false, error: "RATE_LIMIT"};
+        return;
+      }
+      this.storage.pluginUiRateWindows.put({pluginId, timestamps});
+      if (timestamps.length >= PLUGIN_UI_RATE_LIMIT) {
+        result = {ok: false, error: "RATE_LIMIT"};
+        return;
+      }
+
+      const leaseId = crypto.randomUUID();
+      this.storage.pluginUiExecutionLeases.put({
+        leaseId,
+        pluginId,
+        expiresAt: now + PLUGIN_UI_EXECUTION_LEASE_MS,
+      });
+      this.storage.pluginUiRateWindows.put({pluginId, timestamps: [...timestamps, now]});
+      result = {ok: true, leaseId};
+    });
+    return result;
+  }
+
+  /** Releases exactly one host-owned execution lease; stale or repeated releases are inert. */
+  finishUserPluginUiExecution(leaseId: string): void {
+    this.storage.pluginUiExecutionLeases.delete(leaseId);
+  }
+
   /** Reads one host-selected state cell only while the exact interactive lifecycle is current. */
   async readUserPluginInteractiveStateForHost(
       pluginId: string,
@@ -1013,6 +1109,8 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       mutationId: string): Promise<
         {ok: true; revision: number; replayed: boolean} |
         {ok: false; currentRevision: number} |
+        {ok: false; currentRevision: number; error: "CELL_QUOTA_EXCEEDED" |
+          "BYTE_QUOTA_EXCEEDED"} |
         null
       > {
     return this.#withPluginLifecycle(expected.pluginId, async () => {

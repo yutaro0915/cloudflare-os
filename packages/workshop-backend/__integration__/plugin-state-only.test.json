@@ -10,7 +10,7 @@
   },
   "presentation": {
     "title": "State-only test plugin",
-    "summary": "Exercises user-only installation state without navigation."
+    "summary": "Exercises installation state without navigation."
   },
   "state": {"kind": "installation"},
   "uiContributions": []

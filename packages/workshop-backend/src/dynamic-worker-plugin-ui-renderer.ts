@@ -5,6 +5,7 @@ import type {
   ResolvePluginCodeArtifactResult,
   VerifiedPluginCodeArtifact,
 } from "./plugin-code-artifact.js";
+import {runPluginUiRpcWithinDeadline} from "./plugin-ui-rpc-deadline.js";
 
 const UI_COMPATIBILITY_DATE = "2026-02-01";
 const UI_COMPATIBILITY_FLAGS = ["disallow_importable_env"] as const;
@@ -127,12 +128,6 @@ export interface PluginUiWorkerStarter {
   render(getCode: () => Promise<WorkerLoaderWorkerCode>): Promise<unknown>;
 }
 
-function disposeRpcValue(value: object): void {
-  if (!(Symbol.dispose in value)) return;
-  const dispose = value[Symbol.dispose];
-  if (typeof dispose === "function") dispose.call(value);
-}
-
 /** Production adapter around Worker Loader's fresh-load boundary. */
 export class WorkerLoaderPluginUiWorkerStarter implements PluginUiWorkerStarter {
   /** Wraps the native loader without mirroring any wider API. */
@@ -141,27 +136,13 @@ export class WorkerLoaderPluginUiWorkerStarter implements PluginUiWorkerStarter 
   async render(getCode: () => Promise<WorkerLoaderWorkerCode>): Promise<unknown> {
     const entrypoint = this.loader.load(await getCode()).getEntrypoint<PluginUiWorkerEntrypoint>();
     const pending = entrypoint.render();
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const result = await Promise.race([
-        pending,
-        new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error("Plugin UI render timed out.")),
-            UI_RENDER_TIMEOUT_MS,
-          );
-        }),
-      ]);
-      try {
-        return structuredClone(result);
-      } finally {
-        disposeRpcValue(result);
-      }
-    } finally {
-      if (timeout !== undefined) clearTimeout(timeout);
-      disposeRpcValue(pending);
-      disposeRpcValue(entrypoint);
-    }
+    return runPluginUiRpcWithinDeadline(
+      pending,
+      [entrypoint],
+      UI_RENDER_TIMEOUT_MS,
+      "Plugin UI render timed out.",
+      result => structuredClone(result),
+    );
   }
 }
 

@@ -58,6 +58,24 @@ describe("production plugin runtime loopback", () => {
     })).resolves.toEqual({ok: true, installationId: first.installationId});
     using refreshSession = authenticated.openGadget(workspaceId);
     await refreshSession.getMetadata();
+    await expect(refreshSession.getPluginRuntimeStatus()).resolves.toMatchObject({
+      outcome: "ready",
+      states: [{
+        pluginId: "test.runtime-metadata",
+        status: "failed",
+        reason: "ACTIVATION_FAILED",
+        candidate: {packageVersion: "2.0.0"},
+        retainedActive: {packageVersion: "1.0.0"},
+      }],
+      observedAt: expect.any(Number),
+    });
+    expect((await workspaceHost.listPluginRuntimeAuditEventsForHost()).some(event =>
+      event.action === "PLUGIN_RUNTIME_RECONCILED" &&
+      event.realmUserId === userId &&
+      event.status.states.some(state =>
+        state.pluginId === "test.runtime-metadata" &&
+        state.status === "failed" && state.reason === "ACTIVATION_FAILED")))
+      .toBe(true);
 
     await expect(workspaceHost.assertPluginWorkspaceMetadataCapabilityForHost(
       userId, "build", "test.runtime-metadata",
@@ -73,6 +91,14 @@ describe("production plugin runtime loopback", () => {
     })).resolves.toEqual({ok: true, installationId: first.installationId});
     using recoveredSession = authenticated.openGadget(workspaceId);
     await recoveredSession.getMetadata();
+    await expect(recoveredSession.getPluginRuntimeStatus()).resolves.toMatchObject({
+      outcome: "ready",
+      states: [{
+        pluginId: "test.runtime-metadata",
+        status: "active",
+        active: {packageVersion: "1.0.0"},
+      }],
+    });
     await expect(workspaceHost.assertPluginWorkspaceMetadataCapabilityForHost(
       userId, "build", "test.runtime-metadata",
     )).resolves.toBeUndefined();

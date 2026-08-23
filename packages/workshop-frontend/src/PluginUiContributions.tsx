@@ -59,7 +59,9 @@ function WorkerRenderedPluginUi({
 }) {
   const [frame, setFrame] = useState<UserPluginUiFrame | null>(null)
   const [loading, setLoading] = useState(false)
-  const [unavailable, setUnavailable] = useState(false)
+  const [failure, setFailure] = useState<
+    'PLUGIN_UI_NOT_AVAILABLE' | 'PLUGIN_UI_BUSY' | 'PLUGIN_UI_RATE_LIMITED' | null
+  >(null)
   const openGeneration = useRef(0)
   const identity = `${pluginId}\0${installationId}\0${packageVersion}\0${contribution.contributionId}`
   const identityRef = useRef(identity)
@@ -72,7 +74,7 @@ function WorkerRenderedPluginUi({
   useEffect(() => {
     setFrame(null)
     setLoading(false)
-    setUnavailable(false)
+    setFailure(null)
   }, [contribution.contributionId, installationId, packageVersion, pluginId])
 
   useEffect(() => () => { openGeneration.current += 1 }, [])
@@ -80,7 +82,7 @@ function WorkerRenderedPluginUi({
   const open = async () => {
     const generation = ++openGeneration.current
     setLoading(true)
-    setUnavailable(false)
+    setFailure(null)
     try {
       const result = await openFrame({
         pluginId,
@@ -91,10 +93,10 @@ function WorkerRenderedPluginUi({
       if (result.ok) {
         setFrame(result.frame)
       }
-      else setUnavailable(true)
+      else setFailure(result.error)
     } catch {
       if (generation !== openGeneration.current) return
-      setUnavailable(true)
+      setFailure('PLUGIN_UI_NOT_AVAILABLE')
     } finally {
       if (generation === openGeneration.current) setLoading(false)
     }
@@ -124,9 +126,13 @@ function WorkerRenderedPluginUi({
       <WorkshopButton className="mt-3" onClick={open} disabled={loading}>
         <ArrowSquareOut size={13} /> {loading ? 'Opening…' : `Open ${contribution.title}`}
       </WorkshopButton>
-      {unavailable && (
+      {failure && (
         <p role="alert" className="mt-3 text-[12px] text-kumo-danger">
-          This plugin view is no longer available. Refresh Plugin Center and try again.
+          {failure === 'PLUGIN_UI_BUSY'
+            ? 'Plugin execution is busy. Try again in a moment.'
+            : failure === 'PLUGIN_UI_RATE_LIMITED'
+              ? 'Plugin execution reached its per-minute limit. Try again shortly.'
+              : 'This plugin view is no longer available. Refresh Plugin Center and try again.'}
         </p>
       )}
     </div>

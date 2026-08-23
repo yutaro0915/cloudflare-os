@@ -310,7 +310,7 @@ export type InstallPluginResult = {
 
   /** Stable reason the authenticated user can correct. */
   error: "PLUGIN_VERSION_NOT_FOUND" | "CAPABILITY_APPROVAL_MISMATCH" |
-    "PLUGIN_SCOPE_NOT_SUPPORTED";
+    "PLUGIN_SCOPE_NOT_SUPPORTED" | "UNINSTALL_IN_PROGRESS";
 };
 
 /** User-scoped install request accepted by `AuthenticatedApi.installUserPlugin()`. */
@@ -381,6 +381,36 @@ export type PurgeUserPluginStateResult = {
   /** Stable expected failure visible to the authenticated user. */
   error: "DETACHED_PLUGIN_STATE_NOT_FOUND";
 };
+
+/** Workspace-scoped uninstall request using an observed lifecycle identifier. */
+export type UninstallWorkspacePluginRequest = UninstallUserPluginRequest;
+
+/** Result of revoking and detaching one workspace installation lifecycle. */
+export type UninstallWorkspacePluginResult = UninstallUserPluginResult;
+
+/** Safe summary of detached workspace plugin state. */
+export type DetachedWorkspacePluginStateSummary = DetachedUserPluginStateSummary;
+
+/** Workspace-scoped purge request using an observed detached lifecycle identifier. */
+export type PurgeWorkspacePluginStateRequest = PurgeUserPluginStateRequest;
+
+/** Result of permanently purging one detached workspace state lifecycle. */
+export type PurgeWorkspacePluginStateResult = PurgeUserPluginStateResult;
+
+/** Deployment-scoped uninstall request using an observed lifecycle identifier. */
+export type UninstallDeploymentPluginRequest = UninstallUserPluginRequest;
+
+/** Result of revoking and detaching one deployment installation lifecycle. */
+export type UninstallDeploymentPluginResult = UninstallUserPluginResult;
+
+/** Safe summary of detached deployment plugin state. */
+export type DetachedDeploymentPluginStateSummary = DetachedUserPluginStateSummary;
+
+/** Deployment-scoped purge request using an observed detached lifecycle identifier. */
+export type PurgeDeploymentPluginStateRequest = PurgeUserPluginStateRequest;
+
+/** Result of permanently purging one detached deployment state lifecycle. */
+export type PurgeDeploymentPluginStateResult = PurgeUserPluginStateResult;
 
 /** Plain text block rendered by the trusted host. */
 export interface UserPluginDeclarativeTextBlock {
@@ -579,7 +609,7 @@ export type OpenUserPluginUiFrameResult = {
   ok: false;
 
   /** Collapsed expected failure that does not reveal internal policy or artifact state. */
-  error: "PLUGIN_UI_NOT_AVAILABLE";
+  error: "PLUGIN_UI_NOT_AVAILABLE" | "PLUGIN_UI_BUSY" | "PLUGIN_UI_RATE_LIMITED";
 };
 
 /** Safe navigation entry derived from one exact current user installation. */
@@ -719,11 +749,23 @@ export type InteractUserPluginSurfaceResult = {
   /** Stable expected failure. */
   error: "PLUGIN_UI_NOT_AVAILABLE";
 } | {
+  /** The user's bounded execution concurrency or sliding-window frequency was exhausted. */
+  ok: false;
+
+  /** Stable retryable execution-control failure. */
+  error: "PLUGIN_UI_BUSY" | "PLUGIN_UI_RATE_LIMITED";
+} | {
   /** A concurrent action committed first; no mutation was applied. */
   ok: false;
 
   /** Stable compare-and-set conflict. */
   error: "PLUGIN_UI_CONFLICT";
+} | {
+  /** The next plugin-owned state would exceed its installation quota. */
+  ok: false;
+
+  /** Stable bounded-state failure. */
+  error: "PLUGIN_UI_STATE_QUOTA_EXCEEDED";
 };
 
 /** Workspace-scoped install result returned by `Overseer.installWorkspacePlugin()`. */
@@ -734,6 +776,47 @@ export type InstallWorkspacePluginResult = InstallPluginResult | {
   /** The manifest exceeds the capability ceiling most recently approved by the owner. */
   error: "CAPABILITY_OWNER_APPROVAL_REQUIRED";
 };
+
+/** Stable runtime identity safe to expose without activation keys, leases, or state references. */
+export interface PluginRuntimeIdentityView {
+  installationId: string;
+  pluginId: string;
+  packageVersion: string;
+  manifestDigest: string;
+}
+
+/** One reconciled plugin state projected from the host-owned runtime realm. */
+export type PluginRuntimeStateView = {
+  pluginId: string;
+  status: "active";
+  active: PluginRuntimeIdentityView;
+} | {
+  pluginId: string;
+  status: "suspended";
+  candidate: PluginRuntimeIdentityView;
+  reason: "MISSING_DEPENDENCY" | "DEPENDENCY_UNAVAILABLE";
+  retainedActive?: PluginRuntimeIdentityView;
+} | {
+  pluginId: string;
+  status: "failed";
+  candidate?: PluginRuntimeIdentityView;
+  reason:
+    "ACTIVATION_FAILED" | "CYCLIC_DEPENDENCY" |
+    "DEACTIVATION_FAILED" | "DEACTIVATION_BLOCKED" |
+    "MANIFEST_NOT_FOUND" | "MANIFEST_INTEGRITY_MISMATCH" |
+    "RUNTIME_ARTIFACT_NOT_DECLARED" | "CAPABILITY_UNSUPPORTED" |
+    "MANIFEST_DENYLISTED" | "RUNTIME_AUTHORITY_REVOKED" |
+    "RUNTIME_INVOCATION_FAILED";
+  retainedActive?: PluginRuntimeIdentityView;
+};
+
+/** Current safe runtime projection for exactly one authenticated workspace-user-role realm. */
+export interface PluginRuntimeStatusView {
+  /** `conflict` preserves the previous active set; `refresh-failed` preserves the last snapshot. */
+  outcome: "ready" | "conflict" | "refresh-failed";
+  states: PluginRuntimeStateView[];
+  observedAt: number;
+}
 
 // Top-level API exposed to the user after they have authenticated.
 export interface AuthenticatedApi extends RpcTarget {
@@ -1336,6 +1419,34 @@ export interface AdminApi {
 
   /** Install one exact deployment-scoped plugin after manifest and approval verification. */
   installDeploymentPlugin(request: InstallPluginRequest): Promise<InstallPluginResult>;
+
+  /** Revokes one deployment lifecycle before removing its desired-state record. */
+  uninstallDeploymentPlugin(
+    request: UninstallDeploymentPluginRequest,
+  ): Promise<UninstallDeploymentPluginResult>;
+
+  /** Lists retained deployment state without exposing opaque state references. */
+  listDetachedDeploymentPluginStates(): Promise<DetachedDeploymentPluginStateSummary[]>;
+
+  /** Permanently purges one exact detached deployment state lifecycle. */
+  purgeDeploymentPluginState(
+    request: PurgeDeploymentPluginStateRequest,
+  ): Promise<PurgeDeploymentPluginStateResult>;
+
+  /** Approves and atomically publishes one already-verified immutable Store candidate. */
+  approvePluginStoreCandidate(candidateId: string): Promise<{
+    /** The candidate is now published, or was already published idempotently. */
+    ok: true;
+
+    /** Stable content address of the published candidate envelope. */
+    candidateId: string;
+  } | {
+    /** Publication did not change Store visibility. */
+    ok: false;
+
+    /** Stable expected publication failure. */
+    error: "CANDIDATE_NOT_FOUND" | "PLUGIN_VERSION_ALREADY_PUBLISHED";
+  }>;
 
   /** Permanently deny one immutable plugin manifest digest for new and existing runtime use. */
   denyPluginManifest(manifestDigest: string): Promise<{
@@ -1980,8 +2091,24 @@ export interface Overseer extends RpcTarget {
   // Get metadata describing this workspace.
   getMetadata(): Promise<GadgetMetadata>;
 
+  /** Reads runtime health without exposing capability, lifecycle, or worker authority. */
+  getPluginRuntimeStatus(): Promise<PluginRuntimeStatusView>;
+
   /** Install or update one exact workspace plugin through this role-gated session. */
   installWorkspacePlugin(request: InstallPluginRequest): Promise<InstallWorkspacePluginResult>;
+
+  /** Revokes one workspace lifecycle before removing its desired-state record. */
+  uninstallWorkspacePlugin(
+    request: UninstallWorkspacePluginRequest,
+  ): Promise<UninstallWorkspacePluginResult>;
+
+  /** Lists retained workspace state without exposing opaque state references. */
+  listDetachedWorkspacePluginStates(): Promise<DetachedWorkspacePluginStateSummary[]>;
+
+  /** Permanently purges one exact detached workspace state lifecycle. */
+  purgeWorkspacePluginState(
+    request: PurgeWorkspacePluginStateRequest,
+  ): Promise<PurgeWorkspacePluginStateResult>;
 
   // Get metadata describing this workspace and subscribe to changes.
   //

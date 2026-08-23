@@ -54,7 +54,13 @@ export function PluginSurfacePage({
     if (!result.ok) {
       setError(result.error === 'PLUGIN_UI_CONFLICT'
         ? 'This plugin view changed in another tab. Reloading the latest version.'
-        : 'This plugin is no longer available.')
+        : result.error === 'PLUGIN_UI_BUSY'
+          ? 'Plugin execution is busy. Try again in a moment.'
+          : result.error === 'PLUGIN_UI_RATE_LIMITED'
+            ? 'Plugin execution reached its per-minute limit. Try again shortly.'
+            : result.error === 'PLUGIN_UI_STATE_QUOTA_EXCEEDED'
+              ? 'This plugin has reached its state storage limit.'
+              : 'This plugin is no longer available.')
       if (result.error === 'PLUGIN_UI_NOT_AVAILABLE') setSnapshot(null)
       return false
     }

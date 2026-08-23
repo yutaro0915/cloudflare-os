@@ -191,9 +191,11 @@ export interface PluginManifestCatalog extends PluginManifestResolver {
   list(): Promise<readonly VerifiedPluginManifest[]>;
 }
 
-/** Returns whether a verified manifest declares installation state owned only by UserDO. */
+/** Returns whether a verified manifest contributes a surface supported only in user scope. */
 export function isUserOnlyPluginManifest(manifest: VerifiedPluginManifest): boolean {
-  return manifest.schemaVersion === 5 && manifest.state?.kind === "installation";
+  return manifest.uiContributions?.some(
+    contribution => contribution.slot === "user-plugin.navigation",
+  ) ?? false;
 }
 
 /** Manifest resolver backed by the immutable entries bundled into one deployment. */

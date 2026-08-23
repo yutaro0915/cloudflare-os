@@ -7,6 +7,73 @@ import type {
 } from "../src/plugin-installation.js";
 
 describe("user plugin installations", () => {
+  it("enforces installation state cell and byte quotas without advancing failed CAS state", async () => {
+    const ownerDo = exports.UserDurableObject.getByName("plugin-state-quota-owner");
+    const state = exports.PluginStateDurableObject.getByName("plugin-state-quota");
+    const owner = {
+      scope: "user" as const,
+      targetId: ownerDo.id.toString(),
+      pluginId: "example.quota",
+      installationId: "installation-quota-v1",
+    };
+
+    for (let index = 0; index < 64; index += 1) {
+      await expect(state.compareAndSetForHost(
+        owner,
+        `cell-${index}`,
+        0,
+        {index},
+        `mutation-${index}`,
+      )).resolves.toEqual({ok: true, revision: 1, replayed: false});
+    }
+    await expect(state.compareAndSetForHost(
+      owner,
+      "cell-over-limit",
+      0,
+      {blocked: true},
+      "mutation-over-cell-limit",
+    )).resolves.toEqual({
+      ok: false,
+      currentRevision: 0,
+      error: "CELL_QUOTA_EXCEEDED",
+    });
+    await expect(state.readUsageForHost(owner)).resolves.toMatchObject({
+      cellCount: 64,
+      maxCellCount: 64,
+      maxValueBytes: 64 * 1024,
+      maxTotalValueBytes: 256 * 1024,
+    });
+
+    const byteState = exports.PluginStateDurableObject.getByName("plugin-state-byte-quota");
+    const chunk = "x".repeat(60 * 1024);
+    for (let index = 0; index < 4; index += 1) {
+      await expect(byteState.compareAndSetForHost(
+        owner,
+        `chunk-${index}`,
+        0,
+        chunk,
+        `chunk-mutation-${index}`,
+      )).resolves.toEqual({ok: true, revision: 1, replayed: false});
+    }
+    const before = await byteState.readUsageForHost(owner);
+    await expect(byteState.compareAndSetForHost(
+      owner,
+      "chunk-over-limit",
+      0,
+      chunk,
+      "chunk-mutation-over-limit",
+    )).resolves.toEqual({
+      ok: false,
+      currentRevision: 0,
+      error: "BYTE_QUOTA_EXCEEDED",
+    });
+    await expect(byteState.readVersioned(owner, "chunk-over-limit")).resolves.toEqual({
+      revision: 0,
+      value: null,
+    });
+    await expect(byteState.readUsageForHost(owner)).resolves.toEqual(before);
+  });
+
   it("stores one bounded versioned plugin-state cell with compare-and-set semantics", async () => {
     const ownerDo = exports.UserDurableObject.getByName("plugin-versioned-state-owner");
     const state = exports.PluginStateDurableObject.getByName("plugin-versioned-state");

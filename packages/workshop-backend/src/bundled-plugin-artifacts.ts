@@ -19,6 +19,12 @@ export class BundledPluginCodeArtifactStore implements PluginCodeArtifactStore {
 }
 
 /** Deployment-bundled artifact resolver that re-hashes source on every cold Loader callback. */
+/** Deployment-reviewed bundled artifact store used as the immutable fallback tier. */
+export const bundledPluginCodeArtifactStore = new BundledPluginCodeArtifactStore(
+  BUNDLED_PLUGIN_CODE_ARTIFACTS,
+);
+
+/** Deployment-bundled artifact resolver that re-hashes source on every cold Loader callback. */
 export const bundledPluginCodeArtifactResolver = new VerifyingPluginCodeArtifactResolver(
-  new BundledPluginCodeArtifactStore(BUNDLED_PLUGIN_CODE_ARTIFACTS),
+  bundledPluginCodeArtifactStore,
 );

@@ -32,6 +32,78 @@ async function createAccount(
 }
 
 describe("workspace plugin installations", () => {
+  it("revokes, detaches, and owner-purges workspace installation state across reconstruction", async () => {
+    using publicApi = await connect();
+    const ownerAccount = await createAccount(publicApi, "workspacepluginstateowner");
+    using owner = await publicApi.authenticate(ownerAccount.token);
+    using workspace = await owner.newGadget();
+    const workspaceId = (await workspace.getMetadata()).id;
+    const host = exports.OverseerDurableObject.get(
+      exports.OverseerDurableObject.idFromString(workspaceId),
+    );
+
+    const installed = await workspace.installWorkspacePlugin({
+      pluginId: "test.state-only",
+      packageVersion: "1.0.0",
+      approvedCapabilities: [],
+    });
+    expect(installed).toMatchObject({ok: true, installationId: expect.any(String)});
+    if (!installed.ok) throw new Error("Expected stateful workspace installation.");
+    const [record] = await host.listWorkspacePluginInstallationsForHost();
+    if (record?.stateRef === undefined) throw new Error("Expected workspace stateRef.");
+    const stateOwner = {
+      scope: "workspace" as const,
+      targetId: host.id.toString(),
+      pluginId: record.pluginId,
+      installationId: record.installationId,
+    };
+    const state = exports.PluginStateDurableObject.get(
+      exports.PluginStateDurableObject.idFromString(record.stateRef),
+    );
+    await state.putForHost(stateOwner, "marker", {workspace: true});
+
+    await expect(workspace.uninstallWorkspacePlugin({
+      pluginId: record.pluginId,
+      expectedInstallationId: record.installationId,
+    })).resolves.toEqual({
+      ok: true,
+      installationId: record.installationId,
+      retainedState: true,
+    });
+    await expect(host.readWorkspacePluginInstallationsSnapshotForRuntimeHost())
+      .resolves.toEqual([]);
+    await abortAllDurableObjects();
+
+    const reconstructed = exports.OverseerDurableObject.get(
+      exports.OverseerDurableObject.idFromString(workspaceId),
+    );
+    await expect(reconstructed.listWorkspacePluginInstallationsForHost()).resolves.toEqual([]);
+    await expect(reconstructed.listDetachedWorkspacePluginStatesForHost()).resolves.toMatchObject([{
+      installationId: record.installationId,
+      pluginId: record.pluginId,
+      stateRef: record.stateRef,
+    }]);
+    const reconstructedState = exports.PluginStateDurableObject.get(
+      exports.PluginStateDurableObject.idFromString(record.stateRef),
+    );
+    await expect(reconstructedState.read(stateOwner, "marker"))
+      .resolves.toEqual({workspace: true});
+    using reconstructedPublicApi = await connect();
+    using reconstructedOwner = await reconstructedPublicApi.authenticate(ownerAccount.token);
+    using reconstructedWorkspace = await reconstructedOwner.openGadget(workspaceId);
+    await expect(reconstructedWorkspace.purgeWorkspacePluginState({
+      installationId: record.installationId,
+    })).resolves.toEqual({ok: true, installationId: record.installationId});
+    await expect(reconstructedState.read(stateOwner, "marker"))
+      .rejects.toThrow("Plugin state was purged");
+    expect((await reconstructed.listWorkspacePluginAuditEventsForHost())
+      .map(event => event.action)).toEqual([
+        "PLUGIN_DESIRED_STATE_PUT",
+        "PLUGIN_UNINSTALLED",
+        "PLUGIN_STATE_PURGED",
+      ]);
+  });
+
   it("rejects a user-navigation plugin before workspace desired state changes", async () => {
     using publicApi = await connect();
     const owner = await createAccount(publicApi, "workspacekanbanscope");
@@ -42,11 +114,6 @@ describe("workspace plugin installations", () => {
       pluginId: "test.kanban",
       packageVersion: "1.0.0",
       approvedCapabilities: ["plugin.ui.state.mutate"],
-    })).resolves.toEqual({ok: false, error: "PLUGIN_SCOPE_NOT_SUPPORTED"});
-    await expect(workspace.installWorkspacePlugin({
-      pluginId: "test.state-only",
-      packageVersion: "1.0.0",
-      approvedCapabilities: [],
     })).resolves.toEqual({ok: false, error: "PLUGIN_SCOPE_NOT_SUPPORTED"});
     const workspaceId = (await workspace.getMetadata()).id;
     const host = exports.OverseerDurableObject.get(

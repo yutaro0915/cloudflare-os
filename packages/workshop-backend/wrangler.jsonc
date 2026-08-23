@@ -60,6 +60,10 @@
     {
       "tag": "v3",
       "new_sqlite_classes": [ "PluginStateDurableObject" ]
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": [ "PluginStoreDurableObject" ]
     }
   ],
 

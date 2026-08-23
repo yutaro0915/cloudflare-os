@@ -16,7 +16,7 @@ interface __BaseEnv_Env {
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./src/server");
-		durableNamespaces: "UserDurableObject" | "OverseerDurableObject" | "AdminSettings" | "PendingLogin" | "PluginStateDurableObject";
+		durableNamespaces: "UserDurableObject" | "OverseerDurableObject" | "AdminSettings" | "PendingLogin" | "PluginStateDurableObject" | "PluginStoreDurableObject";
 	}
 	interface Env extends __BaseEnv_Env {}
 }

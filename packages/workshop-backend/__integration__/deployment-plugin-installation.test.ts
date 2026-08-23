@@ -43,6 +43,64 @@ beforeEach(async () => {
 });
 
 describe("deployment plugin installations", () => {
+  it("revokes, detaches, and admin-purges deployment installation state", async () => {
+    using publicApi = await connect();
+    const account = await createAccount(publicApi, ADMIN_USERNAME);
+    using authenticated = await publicApi.authenticate(account.token);
+    using admin = await authenticated.getAdminApi();
+    if (admin === null) throw new Error("Expected the configured admin capability.");
+    const host = exports.AdminSettings.getByName("");
+
+    const installed = await admin.installDeploymentPlugin({
+      pluginId: "test.state-only",
+      packageVersion: "1.0.0",
+      approvedCapabilities: [],
+    });
+    expect(installed).toMatchObject({ok: true, installationId: expect.any(String)});
+    if (!installed.ok) throw new Error("Expected stateful deployment installation.");
+    const [record] = await host.listDeploymentPluginInstallationsForHost();
+    if (record?.stateRef === undefined) throw new Error("Expected deployment stateRef.");
+    const stateOwner = {
+      scope: "deployment" as const,
+      targetId: host.id.toString(),
+      pluginId: record.pluginId,
+      installationId: record.installationId,
+    };
+    const state = exports.PluginStateDurableObject.get(
+      exports.PluginStateDurableObject.idFromString(record.stateRef),
+    );
+    await state.putForHost(stateOwner, "marker", {deployment: true});
+
+    await expect(admin.uninstallDeploymentPlugin({
+      pluginId: record.pluginId,
+      expectedInstallationId: record.installationId,
+    })).resolves.toEqual({
+      ok: true,
+      installationId: record.installationId,
+      retainedState: true,
+    });
+    await expect(host.readPluginRuntimePolicySnapshotForHost()).resolves.toMatchObject({
+      installations: [],
+    });
+    await expect(host.listDetachedDeploymentPluginStatesForHost()).resolves.toMatchObject([{
+      installationId: record.installationId,
+      pluginId: record.pluginId,
+      stateRef: record.stateRef,
+    }]);
+    await expect(state.read(stateOwner, "marker")).resolves.toEqual({deployment: true});
+
+    await expect(admin.purgeDeploymentPluginState({
+      installationId: record.installationId,
+    })).resolves.toEqual({ok: true, installationId: record.installationId});
+    await expect(state.read(stateOwner, "marker")).rejects.toThrow("Plugin state was purged");
+    expect((await host.listDeploymentPluginAuditEventsForHost()).map(event => event.action))
+      .toEqual([
+        "PLUGIN_DESIRED_STATE_PUT",
+        "PLUGIN_UNINSTALLED",
+        "PLUGIN_STATE_PURGED",
+      ]);
+  });
+
   it("rejects a user-navigation plugin before deployment desired state changes", async () => {
     using publicApi = await connect();
     const account = await createAccount(publicApi, REJECT_ADMIN_USERNAME);
@@ -54,11 +112,6 @@ describe("deployment plugin installations", () => {
       pluginId: "test.kanban",
       packageVersion: "1.0.0",
       approvedCapabilities: ["plugin.ui.state.mutate"],
-    })).resolves.toEqual({ok: false, error: "PLUGIN_SCOPE_NOT_SUPPORTED"});
-    await expect(admin.installDeploymentPlugin({
-      pluginId: "test.state-only",
-      packageVersion: "1.0.0",
-      approvedCapabilities: [],
     })).resolves.toEqual({ok: false, error: "PLUGIN_SCOPE_NOT_SUPPORTED"});
     const host = exports.AdminSettings.getByName("");
     await expect(host.listDeploymentPluginInstallationsForHost()).resolves.toEqual([]);
