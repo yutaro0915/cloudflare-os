@@ -69,7 +69,7 @@
       </header>
 
       <div class="notice">
-        3本とも 1280×720 の実画面収録です。作成者と利用者を分けたインポート、状態を保持したアンインストール、保持データの明示的な削除まで確認できます。
+        3本とも 1600×900 の連続した実画面収録です。作成候補が公開前にストアから隠れていること、別ユーザーによる権限確認付きインポート、再読込後の状態保持、安全なアンインストール、保持データの明示的な完全削除まで確認できます。
       </div>
 
       <section class="grid" aria-label="実証動画">
@@ -80,8 +80,8 @@
           <div class="copy">
             <div class="number">VIDEO 01</div>
             <h2>作成・隔離テスト・審査・公開</h2>
-            <p>新規管理者が Incident Brief プラグインを作り、隔離テストを通し、候補としてステージし、管理者審査で公開してからインポートして開きます。</p>
-            <div class="facts"><span>43.6秒</span><span>H.264</span><span>44 / 44 固有フレーム</span></div>
+            <p>管理者が Incident Brief を実際に入力して作成し、生成マニフェスト、成果物ダイジェスト、Dynamic Worker 隔離テスト、署名を確認します。未公開候補を別の最終承認で公開し、権限確認後にインポートして Worker UI を開きます。</p>
+            <div class="facts"><span>43.6秒</span><span>H.264 / 1600×900</span><span>44 / 44 固有フレーム</span><span>8 可視マイルストーン</span></div>
           </div>
         </article>
 
@@ -92,8 +92,8 @@
           <div class="copy">
             <div class="number">VIDEO 02</div>
             <h2>別ユーザーがインポートして使用</h2>
-            <p>管理者が状態保持型の Personal Board を公開し、サインアウト後に別ユーザーを作成。そのユーザーがストアからインポートし、タスクを追加して Doing に移動します。</p>
-            <div class="facts"><span>51.5秒</span><span>H.264</span><span>52 / 52 固有フレーム</span></div>
+            <p>管理者が状態保持型の Release Board を作成・審査・公開し、サインアウトします。別ユーザー pluginreviewer としてサインインしたことをプロフィールで示し、正確なパッケージと権限を確認してインポート。タスクを追加・移動し、再読込後も Doing に残ることを示します。</p>
+            <div class="facts"><span>61.2秒</span><span>H.264 / 1600×900</span><span>61 / 61 固有フレーム</span><span>10 可視マイルストーン</span></div>
           </div>
         </article>
 
@@ -104,8 +104,8 @@
           <div class="copy">
             <div class="number">VIDEO 03</div>
             <h2>状態を保持して安全にアンインストール</h2>
-            <p>再読み込み後もプラグイン状態が残っていることを確認し、アンインストール後はデータを保持した detached state として表示。最後に別操作で完全削除します。</p>
-            <div class="facts"><span>11.4秒</span><span>H.264</span><span>11 / 11 固有フレーム</span></div>
+            <p>保持済みタスクから開始し、アクセス失効・ナビゲーション消失・データ保持という結果を確認してからアンインストールします。分離されたデータが残ったことを確認し、不可逆性を示す別の確認操作を経て完全削除します。</p>
+            <div class="facts"><span>21.6秒</span><span>H.264 / 1600×900</span><span>22 / 22 固有フレーム</span><span>5 可視マイルストーン</span></div>
           </div>
         </article>
       </section>

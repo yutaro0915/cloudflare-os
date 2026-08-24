@@ -1,34 +1,166 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "capture": "continuous Playwright Chromium viewport recording",
   "baseUrl": "http://127.0.0.1:8787",
   "viewport": {
-    "width": 1280,
-    "height": 720
+    "width": 1600,
+    "height": 900
   },
   "scenarios": [
     {
       "scenario": 1,
-      "assertions": [
-        "candidate-staged-hidden-until-review",
-        "admin-published-exact-candidate",
-        "author-imported-and-opened-worker-rendered-ui"
+      "filename": "plugin-lifecycle-01-author-publish.mp4",
+      "milestones": [
+        {
+          "name": "incident-draft-preview",
+          "timestampSeconds": 14.422,
+          "expectedVisibleText": "Incident handoff ready",
+          "observedText": "LIVE DRAFT OUTPUT Host preview before executable packaging Incident handoff ready 1 Confirm current impact 2 Name the next owner 3 Record the next checkpoint"
+        },
+        {
+          "name": "incident-candidate-hidden",
+          "timestampSeconds": 18.691,
+          "expectedVisibleText": "UNPUBLISHED · HIDDEN FROM STORE",
+          "observedText": "3 Review the immutable candidate Inspect the exact package and passed checks before using the separate publication authority. UNPUBLISHED · HIDDEN FROM STORE Generated manifest projection { \"pluginId\": \"community.recorded-incident-brief\", \"packageVersion\": \"1.0.0\", \"title\": \"Recorded Incident Brief\", \"requestedCapabilities\": [], \"state\": \"none\", \"uiContribution\": { \"title\": \"Incident handoff ready\", \"renderer\": \"worker-rendered-document-v1\" }, \"artifactDigests\": [ \"sha256:f82b764dc3e50b9d53edb1618a0ac8aa14c6029e087a4914972342344ec443f3\", \"sha256:9e1121b3e667ecda173418c4210cab803d29c99afb096a70c9dabeb3dcd31740\" ] } Host verification evidence Manifest schema verified Executable artifact digests verified Dynamic Worker isolation contracts passed Candidate signature verified MANIFEST DIGEST sha256:f8993d2fda32d75a0a5615870bb12ba1adf629b39a9b0c43615d03ee1c1dfc4a CANDIDATE CONTENT ADDRESS sha256:0b58347fcb2fdbe2ee81f77ec50cfa8f57de94a530e4c89f4dd9f1b02c285634 Continue to publication approval"
+        },
+        {
+          "name": "incident-verification-evidence",
+          "timestampSeconds": 21.275,
+          "expectedVisibleText": "Candidate signature verified",
+          "observedText": "Manifest schema verified Executable artifact digests verified Dynamic Worker isolation contracts passed Candidate signature verified"
+        },
+        {
+          "name": "incident-publication-approval",
+          "timestampSeconds": 25.59,
+          "expectedVisibleText": "Final deployment-admin approval",
+          "observedText": "Final deployment-admin approval Publishing makes community.recorded-incident-brief@1.0.0 visible and importable by every user. The immutable candidate content address above is the exact version that will be published. Back to review Approve exact candidate & publish"
+        },
+        {
+          "name": "incident-published",
+          "timestampSeconds": 29.857,
+          "expectedVisibleText": "PUBLISHED TO EVERY USER",
+          "observedText": "3 Review the immutable candidate Inspect the exact package and passed checks before using the separate publication authority. PUBLISHED TO EVERY USER Generated manifest projection { \"pluginId\": \"community.recorded-incident-brief\", \"packageVersion\": \"1.0.0\", \"title\": \"Recorded Incident Brief\", \"requestedCapabilities\": [], \"state\": \"none\", \"uiContribution\": { \"title\": \"Incident handoff ready\", \"renderer\": \"worker-rendered-document-v1\" }, \"artifactDigests\": [ \"sha256:f82b764dc3e50b9d53edb1618a0ac8aa14c6029e087a4914972342344ec443f3\", \"sha256:9e1121b3e667ecda173418c4210cab803d29c99afb096a70c9dabeb3dcd31740\" ] } Host verification evidence Manifest schema verified Executable artifact digests verified Dynamic Worker isolation contracts passed Candidate signature verified MANIFEST DIGEST sha256:f8993d2fda32d75a0a5615870bb12ba1adf629b39a9b0c43615d03ee1c1dfc4a CANDIDATE CONTENT ADDRESS sha256:0b58347fcb2fdbe2ee81f77ec50cfa8f57de94a530e4c89f4dd9f1b02c285634"
+        },
+        {
+          "name": "incident-import-review",
+          "timestampSeconds": 34.223,
+          "expectedVisibleText": "Review exact package before import",
+          "observedText": "Review exact package before import community.recorded-incident-brief@1.0.0 CAPABILITIES None UNINSTALL BEHAVIOR No plugin state is retained. Cancel Approve capabilities & import"
+        },
+        {
+          "name": "incident-installed",
+          "timestampSeconds": 38.473,
+          "expectedVisibleText": "Installed",
+          "observedText": "Recorded Incident Brief Installed community.recorded-incident-brief A worker-rendered incident handoff created and reviewed in this recording. Uninstall VERSIONS 1.0.0No capabilities Installed Incident handoff ready Plugin code runs in a resource-limited Dynamic Worker. Only its validated, inert display document reaches this script-free opaque-origin frame. Open Incident handoff ready"
+        },
+        {
+          "name": "incident-worker-ui-opened",
+          "timestampSeconds": 42.724,
+          "expectedVisibleText": "",
+          "observedText": ""
+        }
       ]
     },
     {
       "scenario": 2,
-      "assertions": [
-        "different-authenticated-user-imported-published-package",
-        "interactive-worker-ui-opened",
-        "persistent-state-created-and-moved"
+      "filename": "plugin-lifecycle-02-cross-user-import-use.mp4",
+      "milestones": [
+        {
+          "name": "board-draft-preview",
+          "timestampSeconds": 12.867,
+          "expectedVisibleText": "Release Board",
+          "observedText": "LIVE DRAFT OUTPUT Host preview before executable packaging Release Board TO DO Run smoke tests Confirm rollback owner DOING DONE"
+        },
+        {
+          "name": "board-candidate-hidden",
+          "timestampSeconds": 17.136,
+          "expectedVisibleText": "UNPUBLISHED · HIDDEN FROM STORE",
+          "observedText": "3 Review the immutable candidate Inspect the exact package and passed checks before using the separate publication authority. UNPUBLISHED · HIDDEN FROM STORE Generated manifest projection { \"pluginId\": \"community.recorded-release-board\", \"packageVersion\": \"1.0.0\", \"title\": \"Recorded Release Board\", \"requestedCapabilities\": [ \"plugin.ui.state.mutate\" ], \"state\": \"installation\", \"uiContribution\": { \"title\": \"Release Board\", \"renderer\": \"worker-interactive-document-v1\" }, \"artifactDigests\": [ \"sha256:f82b764dc3e50b9d53edb1618a0ac8aa14c6029e087a4914972342344ec443f3\", \"sha256:1b949e1cf7262561c68d9f63cf00e370908f625deac98aaa8cf8a7cf9e072018\" ] } Host verification evidence Manifest schema verified Executable artifact digests verified Dynamic Worker isolation contracts passed Candidate signature verified MANIFEST DIGEST sha256:a358b5bfc6520be37a38f2bf064f78caabb4d9bba0d73bd4a69e05b3c15f789f CANDIDATE CONTENT ADDRESS sha256:6a473b4670e9055715a2d2a8f6477d294d1b427c82a8fb9be768e0b821be86c0 Contin"
+        },
+        {
+          "name": "board-verification-evidence",
+          "timestampSeconds": 19.719,
+          "expectedVisibleText": "Candidate signature verified",
+          "observedText": "Manifest schema verified Executable artifact digests verified Dynamic Worker isolation contracts passed Candidate signature verified"
+        },
+        {
+          "name": "board-publication-approval",
+          "timestampSeconds": 23.985,
+          "expectedVisibleText": "Final deployment-admin approval",
+          "observedText": "Final deployment-admin approval Publishing makes community.recorded-release-board@1.0.0 visible and importable by every user. The immutable candidate content address above is the exact version that will be published. Back to review Approve exact candidate & publish"
+        },
+        {
+          "name": "board-published",
+          "timestampSeconds": 28.268,
+          "expectedVisibleText": "PUBLISHED TO EVERY USER",
+          "observedText": "3 Review the immutable candidate Inspect the exact package and passed checks before using the separate publication authority. PUBLISHED TO EVERY USER Generated manifest projection { \"pluginId\": \"community.recorded-release-board\", \"packageVersion\": \"1.0.0\", \"title\": \"Recorded Release Board\", \"requestedCapabilities\": [ \"plugin.ui.state.mutate\" ], \"state\": \"installation\", \"uiContribution\": { \"title\": \"Release Board\", \"renderer\": \"worker-interactive-document-v1\" }, \"artifactDigests\": [ \"sha256:f82b764dc3e50b9d53edb1618a0ac8aa14c6029e087a4914972342344ec443f3\", \"sha256:1b949e1cf7262561c68d9f63cf00e370908f625deac98aaa8cf8a7cf9e072018\" ] } Host verification evidence Manifest schema verified Executable artifact digests verified Dynamic Worker isolation contracts passed Candidate signature verified MANIFEST DIGEST sha256:a358b5bfc6520be37a38f2bf064f78caabb4d9bba0d73bd4a69e05b3c15f789f CANDIDATE CONTENT ADDRESS sha256:6a473b4670e9055715a2d2a8f6477d294d1b427c82a8fb9be768e0b821be86c0"
+        },
+        {
+          "name": "reviewer-identity",
+          "timestampSeconds": 38.819,
+          "expectedVisibleText": "pluginreviewer",
+          "observedText": "pluginreviewer"
+        },
+        {
+          "name": "reviewer-import-review",
+          "timestampSeconds": 43.299,
+          "expectedVisibleText": "Review exact package before import",
+          "observedText": "Review exact package before import community.recorded-release-board@1.0.0 CAPABILITIES plugin.ui.state.mutate UNINSTALL BEHAVIOR State is retained until a separate purge. Cancel Approve capabilities & import"
+        },
+        {
+          "name": "reviewer-installed",
+          "timestampSeconds": 47.551,
+          "expectedVisibleText": "Installed",
+          "observedText": "Recorded Release Board Installed community.recorded-release-board A persistent release board created for a reviewed cross-user import. Uninstall VERSIONS 1.0.01 capabilities Installed"
+        },
+        {
+          "name": "reviewer-state-mutated",
+          "timestampSeconds": 56.534,
+          "expectedVisibleText": "Document release evidence",
+          "observedText": "Document release evidence Move to To do Move to Done Delete"
+        },
+        {
+          "name": "reviewer-state-persisted-after-reload",
+          "timestampSeconds": 59.267,
+          "expectedVisibleText": "Document release evidence",
+          "observedText": "Document release evidence Move to To do Move to Done Delete"
+        }
       ]
     },
     {
       "scenario": 3,
-      "assertions": [
-        "state-visible-after-reload",
-        "uninstall-revoked-and-detached-before-removal",
-        "retained-state-purged-only-after-separate-confirmation"
+      "filename": "plugin-lifecycle-03-safe-uninstall.mp4",
+      "milestones": [
+        {
+          "name": "uninstall-state-present-before-removal",
+          "timestampSeconds": 4.429,
+          "expectedVisibleText": "Document release evidence",
+          "observedText": "Document release evidence Move to To do Move to Done Delete"
+        },
+        {
+          "name": "uninstall-retention-review",
+          "timestampSeconds": 8.912,
+          "expectedVisibleText": "It is not deleted by uninstall.",
+          "observedText": "Review uninstall Access to Recorded Release Board will be revoked and its navigation entry will disappear. Plugin-owned data will be detached and retained. It is not deleted by uninstall. community.recorded-release-board@1.0.0 · lifecycle 24964918-d069-4eb2-8903-cb0ceb69f36b Cancel Uninstall and retain data"
+        },
+        {
+          "name": "uninstall-complete-state-retained",
+          "timestampSeconds": 13.161,
+          "expectedVisibleText": "Detached state retained after uninstall",
+          "observedText": "Recorded Release Board community.recorded-release-board · 1.0.0 Detached state retained after uninstall Purge data"
+        },
+        {
+          "name": "purge-separate-irreversible-review",
+          "timestampSeconds": 17.379,
+          "expectedVisibleText": "This is separate from uninstall and cannot be undone.",
+          "observedText": "Permanently delete retained plugin data This is separate from uninstall and cannot be undone. The retained lifecycle 24964918-d069-4eb2-8903-cb0ceb69f36b will be destroyed. Keep retained data Permanently purge data"
+        },
+        {
+          "name": "purge-complete",
+          "timestampSeconds": 21.629,
+          "expectedVisibleText": "No retained plugin data.",
+          "observedText": "No retained plugin data."
+        }
       ]
     }
   ]
