@@ -319,6 +319,56 @@ export type InstallUserPluginRequest = InstallPluginRequest;
 /** User-scoped install result returned by `AuthenticatedApi.installUserPlugin()`. */
 export type InstallUserPluginResult = InstallPluginResult;
 
+/** Host-owned template used to create a bounded, reviewable user plugin package. */
+export type UserPluginAuthoringTemplate = "focus-brief" | "personal-board";
+
+/** Bounded human input accepted by the trusted plugin authoring gateway. */
+export interface StageUserPluginCandidateRequest {
+  /** Host-owned implementation template; arbitrary executable source is never accepted. */
+  template: UserPluginAuthoringTemplate;
+
+  /** New package identifier in the community namespace. */
+  pluginId: string;
+
+  /** Exact semantic package version. */
+  packageVersion: string;
+
+  /** Trusted-host presentation title. */
+  title: string;
+
+  /** Trusted-host presentation summary. */
+  summary: string;
+
+  /** Template-specific heading rendered as literal text. */
+  surfaceTitle: string;
+
+  /** Bounded literal items used by the selected template. */
+  items: string[];
+}
+
+/** Result of isolation-testing, signing, and staging one human-authored candidate. */
+export type StageUserPluginCandidateResult = {
+  /** Candidate is immutable and remains invisible until an admin publishes it. */
+  ok: true;
+
+  /** Stable content address passed to the separate admin approval capability. */
+  candidateId: string;
+
+  /** Canonical manifest digest recomputed by the host. */
+  manifestDigest: string;
+
+  /** Exact package identity staged for review. */
+  pluginId: string;
+  packageVersion: string;
+} | {
+  /** No installable Store package was created. */
+  ok: false;
+
+  /** Stable expected failure safe for the authoring UI. */
+  error: "ADMIN_REQUIRED" | "INVALID_INPUT" | "ISOLATION_TEST_FAILED" |
+    "CANDIDATE_REJECTED";
+};
+
 /** User-scoped uninstall request accepted without any caller-supplied owner identity. */
 export interface UninstallUserPluginRequest {
   /** Stable package identifier currently installed for the authenticated user. */
@@ -837,6 +887,11 @@ export interface AuthenticatedApi extends RpcTarget {
 
   /** Reads the complete safe Plugin Center projection for the authenticated user. */
   getUserPluginCenter(): Promise<UserPluginCenterView>;
+
+  /** Builds a bounded template package, verifies it in isolation, and stages it unpublished. */
+  stageUserPluginCandidate(
+    request: StageUserPluginCandidateRequest,
+  ): Promise<StageUserPluginCandidateResult>;
 
   /** Opens one exact worker-rendered contribution as an inert display frame. */
   openUserPluginUiFrame(

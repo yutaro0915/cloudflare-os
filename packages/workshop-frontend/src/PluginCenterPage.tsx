@@ -1,5 +1,10 @@
-import { Archive, Package, ShieldCheck, Trash } from '@phosphor-icons/react'
+import { useEffect, useState } from 'react'
+import { RpcStub } from 'capnweb'
+import { Archive, Package, Plus, ShieldCheck, Trash } from '@phosphor-icons/react'
 import type {
+  AdminApi,
+  StageUserPluginCandidateResult,
+  UserPluginAuthoringTemplate,
   UserPluginCenterEntry,
   UserPluginDetachedStateCard,
   UserPluginVersionOffer,
@@ -12,10 +17,10 @@ import { useUserPluginCenter, type UserPluginCenterController } from './useUserP
 
 function capabilityApprovalMessage(offer: UserPluginVersionOffer): string {
   if (offer.requestedCapabilities.length === 0) {
-    return `Install ${offer.title} ${offer.packageVersion}?`
+    return `Import ${offer.title} ${offer.packageVersion}?`
   }
   return [
-    `Install ${offer.title} ${offer.packageVersion} with these capabilities?`,
+    `Import ${offer.title} ${offer.packageVersion} with these capabilities?`,
     '',
     ...offer.requestedCapabilities.map(capability => `• ${capability}`),
   ].join('\n')
@@ -114,7 +119,7 @@ function PluginCard({entry, controller}: {
                     onClick={() => install(offer)}
                     disabled={controller.mutating || current || installation?.lifecycle === 'uninstalling'}
                   >
-                    <ShieldCheck size={13} /> {current ? 'Installed' : installation ? 'Update' : 'Install'}
+                    <ShieldCheck size={13} /> {current ? 'Installed' : installation ? 'Update' : 'Import'}
                   </WorkshopButton>
                 </div>
               )
@@ -138,6 +143,170 @@ function PluginCard({entry, controller}: {
         </div>
       )}
     </article>
+  )
+}
+
+const AUTHORING_PRESETS: Record<UserPluginAuthoringTemplate, {
+  pluginId: string
+  title: string
+  summary: string
+  surfaceTitle: string
+  items: string
+}> = {
+  'focus-brief': {
+    pluginId: 'community.incident-focus',
+    title: 'Incident Focus Brief',
+    summary: 'A concise, worker-rendered handoff guide for incident response.',
+    surfaceTitle: 'Incident handoff ready',
+    items: 'Confirm the current impact\nName the next owner\nRecord the next checkpoint',
+  },
+  'personal-board': {
+    pluginId: 'community.release-board',
+    title: 'Release Readiness Board',
+    summary: 'A persistent three-column board for a release handoff.',
+    surfaceTitle: 'Release Board',
+    items: 'Run smoke tests\nConfirm rollback owner',
+  },
+}
+
+function PluginWorkshop({controller}: {controller: UserPluginCenterController}) {
+  const {authenticatedApi, isAdmin} = useAuthenticatedApi()
+  const [admin, setAdmin] = useState<{api: RpcStub<AdminApi>} | null>(null)
+  const [template, setTemplate] = useState<UserPluginAuthoringTemplate>('focus-brief')
+  const [draft, setDraft] = useState({...AUTHORING_PRESETS['focus-brief']})
+  const [version, setVersion] = useState('1.0.0')
+  const [staged, setStaged] = useState<Extract<StageUserPluginCandidateResult, {ok: true}> | null>(null)
+  const [status, setStatus] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!isAdmin) return
+    let disposed = false
+    let stub: RpcStub<AdminApi> | null = null
+    void authenticatedApi.getAdminApi().then(api => {
+      if (disposed) api?.[Symbol.dispose]?.()
+      else if (api) {
+        stub = api
+        setAdmin({api})
+      }
+    })
+    return () => {
+      disposed = true
+      stub?.[Symbol.dispose]?.()
+    }
+  }, [authenticatedApi, isAdmin])
+
+  if (!isAdmin) return null
+
+  const selectTemplate = (next: UserPluginAuthoringTemplate) => {
+    setTemplate(next)
+    setDraft({...AUTHORING_PRESETS[next]})
+    setStaged(null)
+    setStatus('')
+  }
+
+  const stage = async () => {
+    setBusy(true)
+    setStatus('Running isolated checks and signing the immutable candidate…')
+    try {
+      const result = await authenticatedApi.stageUserPluginCandidate({
+        template,
+        pluginId: draft.pluginId.trim(),
+        packageVersion: version.trim(),
+        title: draft.title.trim(),
+        summary: draft.summary.trim(),
+        surfaceTitle: draft.surfaceTitle.trim(),
+        items: draft.items.split('\n').map(item => item.trim()).filter(Boolean),
+      })
+      if (!result.ok) {
+        setStatus(`Candidate rejected: ${result.error}`)
+        return
+      }
+      setStaged(result)
+      setStatus('Candidate staged. It is signed, tested, and still hidden from the Store.')
+    } catch {
+      setStatus('Candidate staging failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const publish = async () => {
+    if (!staged || !admin) return
+    if (!confirm(`Publish exact candidate ${staged.pluginId}@${staged.packageVersion} to every user?`)) return
+    setBusy(true)
+    setStatus('Publishing the reviewed content-addressed candidate…')
+    try {
+      const result = await admin.api.approvePluginStoreCandidate(staged.candidateId)
+      if (!result.ok) {
+        setStatus(`Publication rejected: ${result.error}`)
+        return
+      }
+      await controller.refresh()
+      setStatus('Published to the Store. Other users can now import this exact version.')
+    } catch {
+      setStatus('Publication failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const fieldClass = 'w-full rounded-lg border border-kumo-line bg-kumo-base px-3 py-2 text-[13px] text-kumo-default outline-none focus:border-kumo-brand'
+  return (
+    <section data-testid="plugin-workshop" aria-labelledby="plugin-workshop-heading" className="mb-10 rounded-2xl border border-kumo-line bg-kumo-tint p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 id="plugin-workshop-heading" className="text-[15px] font-semibold text-kumo-default">Plugin Workshop</h2>
+          <p className="mt-1 max-w-2xl text-[12px] leading-5 text-kumo-subtle">
+            Create a bounded package, run it in an isolated Dynamic Worker, then publish only after a separate admin review.
+          </p>
+        </div>
+        <span className="rounded-full bg-kumo-warning-tint px-2.5 py-1 text-[10px] font-semibold text-kumo-warning">ADMIN AUTHORING</span>
+      </div>
+      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+        <label className="text-[11px] font-semibold text-kumo-subtle">Template
+          <select data-testid="author-template" className={`${fieldClass} mt-1`} value={template}
+            onChange={event => selectTemplate(event.target.value as UserPluginAuthoringTemplate)}>
+            <option value="focus-brief">Worker-rendered focus brief</option>
+            <option value="personal-board">Persistent personal board</option>
+          </select>
+        </label>
+        <label className="text-[11px] font-semibold text-kumo-subtle">Plugin ID
+          <input data-testid="author-plugin-id" className={`${fieldClass} mt-1 font-mono`} value={draft.pluginId}
+            onChange={event => setDraft({...draft, pluginId: event.target.value})} />
+        </label>
+        <label className="text-[11px] font-semibold text-kumo-subtle">Title
+          <input data-testid="author-title" className={`${fieldClass} mt-1`} value={draft.title}
+            onChange={event => setDraft({...draft, title: event.target.value})} />
+        </label>
+        <label className="text-[11px] font-semibold text-kumo-subtle">Version
+          <input data-testid="author-version" className={`${fieldClass} mt-1 font-mono`} value={version}
+            onChange={event => setVersion(event.target.value)} />
+        </label>
+        <label className="text-[11px] font-semibold text-kumo-subtle sm:col-span-2">Summary
+          <input data-testid="author-summary" className={`${fieldClass} mt-1`} value={draft.summary}
+            onChange={event => setDraft({...draft, summary: event.target.value})} />
+        </label>
+        <label className="text-[11px] font-semibold text-kumo-subtle">Surface title
+          <input data-testid="author-surface-title" className={`${fieldClass} mt-1`} value={draft.surfaceTitle}
+            onChange={event => setDraft({...draft, surfaceTitle: event.target.value})} />
+        </label>
+        <label className="text-[11px] font-semibold text-kumo-subtle">Initial items, one per line
+          <textarea data-testid="author-items" className={`${fieldClass} mt-1 min-h-24 resize-y`} value={draft.items}
+            onChange={event => setDraft({...draft, items: event.target.value})} />
+        </label>
+      </div>
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <WorkshopButton data-testid="stage-candidate" onClick={stage} disabled={busy}>
+          <Plus size={13} /> Create &amp; test candidate
+        </WorkshopButton>
+        <WorkshopButton data-testid="publish-candidate" onClick={publish} disabled={busy || !staged || !admin}>
+          <ShieldCheck size={13} /> Review &amp; publish
+        </WorkshopButton>
+        {staged && <code className="max-w-full truncate text-[10px] text-kumo-inactive">{staged.manifestDigest}</code>}
+      </div>
+      {status && <p data-testid="authoring-status" role="status" className="mt-3 text-[12px] text-kumo-subtle">{status}</p>}
+    </section>
   )
 }
 
@@ -199,17 +368,19 @@ export function PluginsPage() {
       <header className="mb-8">
         <h1 className="text-2xl font-semibold tracking-tight text-kumo-default">Plugin Store</h1>
         <p className="mt-1 max-w-2xl text-[13px] leading-5 text-kumo-subtle">
-          Install exact human-reviewed versions, inspect their declared capabilities, and manage retained plugin data.
+          Import exact human-reviewed versions, inspect their declared capabilities, and manage retained plugin data.
         </p>
         <div className="mt-4 max-w-2xl rounded-xl border border-kumo-line bg-kumo-tint px-4 py-3">
-          <p className="text-[12px] font-semibold text-kumo-default">AI publishing is locked</p>
+          <p className="text-[12px] font-semibold text-kumo-default">Publication authority is locked</p>
           <p className="mt-1 text-[12px] leading-5 text-kumo-subtle">
-            Packages enter this Store only through reviewed source and a deployment build. Agents receive no authoring,
-            publishing, or installation authority.
+            Candidates stay invisible while the host verifies their content digests, isolated execution evidence, and
+            signature. Only a deployment admin can publish them.
           </p>
         </div>
         {controller.error && <p role="alert" className="mt-3 text-[12px] text-kumo-danger">{controller.error}</p>}
       </header>
+
+      <PluginWorkshop controller={controller} />
 
       <section aria-labelledby="plugin-catalog-heading">
         <h2 id="plugin-catalog-heading" className="mb-3 text-[12px] font-semibold uppercase tracking-wide text-kumo-inactive">

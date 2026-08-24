@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "capture": "continuous Playwright Chromium viewport recording",
+  "baseUrl": "http://127.0.0.1:8787",
+  "viewport": {
+    "width": 1280,
+    "height": 720
+  },
+  "scenarios": [
+    {
+      "scenario": 1,
+      "assertions": [
+        "candidate-staged-hidden-until-review",
+        "admin-published-exact-candidate",
+        "author-imported-and-opened-worker-rendered-ui"
+      ]
+    },
+    {
+      "scenario": 2,
+      "assertions": [
+        "different-authenticated-user-imported-published-package",
+        "interactive-worker-ui-opened",
+        "persistent-state-created-and-moved"
+      ]
+    },
+    {
+      "scenario": 3,
+      "assertions": [
+        "state-visible-after-reload",
+        "uninstall-revoked-and-detached-before-removal",
+        "retained-state-purged-only-after-separate-confirmation"
+      ]
+    }
+  ]
+}

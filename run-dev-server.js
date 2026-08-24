@@ -300,6 +300,11 @@ const configs = [
 ];
 
 const args = configs.flatMap(c => ["-c", c]);
+// Recording and other isolated local runs can opt into a separate Wrangler state root without
+// deleting or mutating the developer's normal .wrangler state.
+if (process.env.WRANGLER_PERSIST_TO) {
+  args.push("--persist-to", process.env.WRANGLER_PERSIST_TO);
+}
 const backendHost = process.env.VITE_BACKEND_HOST;
 if (backendHost) {
   let wranglerPort;

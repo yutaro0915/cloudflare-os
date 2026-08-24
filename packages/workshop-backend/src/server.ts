@@ -1,7 +1,7 @@
 import { RpcStub, RpcTarget, newWorkersRpcResponse } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import type { JWTPayload } from "jose";
-import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult, type MyBugReportsResult, type InstallUserPluginRequest, type InstallUserPluginResult, type UninstallUserPluginRequest, type UninstallUserPluginResult, type DetachedUserPluginStateSummary, type PurgeUserPluginStateRequest, type PurgeUserPluginStateResult, type UserPluginCenterView, type OpenUserPluginUiFrameRequest, type OpenUserPluginUiFrameResult, type UserPluginNavigationEntry, type InteractUserPluginSurfaceRequest, type InteractUserPluginSurfaceResult } from '@gadgets/workshop-shared/api';
+import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult, type MyBugReportsResult, type InstallUserPluginRequest, type InstallUserPluginResult, type UninstallUserPluginRequest, type UninstallUserPluginResult, type DetachedUserPluginStateSummary, type PurgeUserPluginStateRequest, type PurgeUserPluginStateResult, type UserPluginCenterView, type OpenUserPluginUiFrameRequest, type OpenUserPluginUiFrameResult, type UserPluginNavigationEntry, type InteractUserPluginSurfaceRequest, type InteractUserPluginSurfaceResult, type StageUserPluginCandidateRequest, type StageUserPluginCandidateResult } from '@gadgets/workshop-shared/api';
 import { submitBugReportFlow, refreshBugReportStatuses, bugReportIssueUrl,
          BUG_REPORT_STATUS_CACHE_MS } from "./bug-report.js";
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
@@ -61,6 +61,12 @@ import {
   buildUserPluginNavigation,
   interactUserPluginSurface,
 } from "./user-plugin-interactive-surface.js";
+import {
+  DynamicWorkerPluginCandidateIsolationTester,
+  PluginCandidatePipeline,
+  WebCryptoPluginCandidateSigner,
+} from "./plugin-candidate-pipeline.js";
+import {buildUserAuthoredPluginCandidate} from "./user-plugin-authoring.js";
 
 const logger = createWorkshopLogger("workshop.server");
 
@@ -223,6 +229,41 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       this.user.readUserPluginCenterOwnerSnapshotForHost(),
     ]);
     return buildUserPluginCenterView({manifests, ...owner});
+  }
+  async stageUserPluginCandidate(
+      request: StageUserPluginCandidateRequest): Promise<StageUserPluginCandidateResult> {
+    if (!this.#isAdmin()) return {ok: false, error: "ADMIN_REQUIRED"};
+    const candidate = await buildUserAuthoredPluginCandidate(request);
+    if (candidate === null) return {ok: false, error: "INVALID_INPUT"};
+    const pipeline = new PluginCandidatePipeline(
+      this.ctx.exports.PluginStoreDurableObject.getByName(""),
+      {generate: async () => candidate},
+      new DynamicWorkerPluginCandidateIsolationTester(this.env.LOADER),
+      new WebCryptoPluginCandidateSigner(),
+    );
+    const staged = await pipeline.run({
+      prompt: "host-owned human authoring template",
+      requestedScope: "user",
+      producerId: this.user.id.name!,
+      producerKind: "human",
+    });
+    if (!staged.ok) {
+      return {
+        ok: false,
+        error: staged.error === "ISOLATION_TEST_FAILED"
+          ? "ISOLATION_TEST_FAILED"
+          : staged.error === "CANDIDATE_REJECTED"
+            ? "CANDIDATE_REJECTED"
+            : "INVALID_INPUT",
+      };
+    }
+    return {
+      ok: true,
+      candidateId: staged.candidateId,
+      manifestDigest: staged.manifestDigest,
+      pluginId: request.pluginId,
+      packageVersion: request.packageVersion,
+    };
   }
   async openUserPluginUiFrame(
       request: OpenUserPluginUiFrameRequest): Promise<OpenUserPluginUiFrameResult> {

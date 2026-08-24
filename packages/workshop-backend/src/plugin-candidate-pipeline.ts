@@ -71,6 +71,31 @@ export interface PluginCandidateSigner {
   }>;
 }
 
+/** Host-side ephemeral signer for one process-local candidate submission capability. */
+export class WebCryptoPluginCandidateSigner implements PluginCandidateSigner {
+  readonly #keys = crypto.subtle.generateKey(
+    {name: "ECDSA", namedCurve: "P-256"},
+    true,
+    ["sign", "verify"],
+  ) as Promise<CryptoKeyPair>;
+
+  /** Signs only bytes constructed by the trusted candidate pipeline. */
+  async sign(payload: Uint8Array): Promise<{
+    signerPublicKey: JsonWebKey;
+    signature: Uint8Array;
+  }> {
+    const keys = await this.#keys;
+    return {
+      signerPublicKey: await crypto.subtle.exportKey("jwk", keys.publicKey),
+      signature: new Uint8Array(await crypto.subtle.sign(
+        {name: "ECDSA", hash: "SHA-256"},
+        keys.privateKey,
+        payload,
+      )),
+    };
+  }
+}
+
 /** Existing owner approval revalidated before user/workspace auto-publication. */
 export interface PluginCandidatePublicationAuthority {
   /** Auto-publication is intentionally unavailable for deployment scope. */
@@ -237,6 +262,7 @@ export class PluginCandidatePipeline {
     prompt: string;
     requestedScope: "deployment" | "workspace" | "user";
     producerId: string;
+    producerKind?: "human" | "ai";
     publicationAuthority?: PluginCandidatePublicationAuthority;
   }): Promise<{
     ok: true;
@@ -283,7 +309,7 @@ export class PluginCandidatePipeline {
       artifacts: generated.artifacts,
       evidence: [tested.evidence],
       requestedScope: input.requestedScope,
-      producer: {kind: "ai", id: input.producerId},
+      producer: {kind: input.producerKind ?? "ai", id: input.producerId},
       ...signed,
     });
     if (!staged.ok) return {ok: false, error: "CANDIDATE_REJECTED"};
