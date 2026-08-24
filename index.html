@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Cloudflare OS のプラグイン作成・公開・他ユーザーによるインポート・安全なアンインストールを、実ブラウザで連続収録した検証動画です。">
+    <title>Cloudflare OS — プラグイン・ライフサイクル実証動画</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #080b12;
+        color: #f6f7fb;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at 10% 0%, rgba(246, 117, 52, .18), transparent 34rem),
+          radial-gradient(circle at 95% 20%, rgba(70, 118, 255, .14), transparent 32rem),
+          #080b12;
+      }
+      main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 64px 0 80px; }
+      header { max-width: 860px; margin-bottom: 40px; }
+      .eyebrow { color: #ff985f; font-size: 13px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+      h1 { margin: 12px 0 16px; font-size: clamp(34px, 6vw, 64px); line-height: 1.02; letter-spacing: -.045em; }
+      header p { margin: 0; color: #bac0cf; font-size: clamp(16px, 2vw, 20px); line-height: 1.7; }
+      .notice {
+        margin: 28px 0 42px;
+        padding: 18px 20px;
+        border: 1px solid #2c3448;
+        border-radius: 14px;
+        background: rgba(18, 23, 35, .78);
+        color: #d7dae3;
+        line-height: 1.65;
+      }
+      .grid { display: grid; gap: 30px; }
+      article {
+        overflow: hidden;
+        border: 1px solid #2c3448;
+        border-radius: 20px;
+        background: rgba(16, 20, 31, .9);
+        box-shadow: 0 24px 70px rgba(0, 0, 0, .25);
+      }
+      video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #03050a; }
+      .copy { padding: 24px 26px 28px; }
+      .number { color: #ff985f; font-size: 13px; font-weight: 800; letter-spacing: .11em; }
+      h2 { margin: 7px 0 10px; font-size: clamp(22px, 3vw, 30px); letter-spacing: -.025em; }
+      .copy p { margin: 0; color: #b8bfce; line-height: 1.7; }
+      .facts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 17px; }
+      .facts span { padding: 6px 10px; border-radius: 999px; background: #202738; color: #e8eaf0; font-size: 13px; }
+      footer { margin-top: 40px; color: #9ca4b6; font-size: 14px; line-height: 1.7; }
+      a { color: #9db9ff; }
+      @media (max-width: 620px) {
+        main { width: min(100% - 20px, 1120px); padding-top: 38px; }
+        .copy { padding: 20px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="eyebrow">Cloudflare OS / 実証記録</div>
+        <h1>プラグインを作り、公開し、使い、安全に外す。</h1>
+        <p>スライドではありません。Playwright で実際の Chromium 画面を連続収録し、H.264 の動画として公開しています。</p>
+      </header>
+
+      <div class="notice">
+        3本とも 1280×720 の実画面収録です。作成者と利用者を分けたインポート、状態を保持したアンインストール、保持データの明示的な削除まで確認できます。
+      </div>
+
+      <section class="grid" aria-label="実証動画">
+        <article>
+          <video controls preload="metadata" playsinline src="plugin-lifecycle-01-author-publish.mp4">
+            <a href="plugin-lifecycle-01-author-publish.mp4">動画1を開く</a>
+          </video>
+          <div class="copy">
+            <div class="number">VIDEO 01</div>
+            <h2>作成・隔離テスト・審査・公開</h2>
+            <p>新規管理者が Incident Brief プラグインを作り、隔離テストを通し、候補としてステージし、管理者審査で公開してからインポートして開きます。</p>
+            <div class="facts"><span>43.6秒</span><span>H.264</span><span>44 / 44 固有フレーム</span></div>
+          </div>
+        </article>
+
+        <article>
+          <video controls preload="metadata" playsinline src="plugin-lifecycle-02-cross-user-import-use.mp4">
+            <a href="plugin-lifecycle-02-cross-user-import-use.mp4">動画2を開く</a>
+          </video>
+          <div class="copy">
+            <div class="number">VIDEO 02</div>
+            <h2>別ユーザーがインポートして使用</h2>
+            <p>管理者が状態保持型の Personal Board を公開し、サインアウト後に別ユーザーを作成。そのユーザーがストアからインポートし、タスクを追加して Doing に移動します。</p>
+            <div class="facts"><span>51.5秒</span><span>H.264</span><span>52 / 52 固有フレーム</span></div>
+          </div>
+        </article>
+
+        <article>
+          <video controls preload="metadata" playsinline src="plugin-lifecycle-03-safe-uninstall.mp4">
+            <a href="plugin-lifecycle-03-safe-uninstall.mp4">動画3を開く</a>
+          </video>
+          <div class="copy">
+            <div class="number">VIDEO 03</div>
+            <h2>状態を保持して安全にアンインストール</h2>
+            <p>再読み込み後もプラグイン状態が残っていることを確認し、アンインストール後はデータを保持した detached state として表示。最後に別操作で完全削除します。</p>
+            <div class="facts"><span>11.4秒</span><span>H.264</span><span>11 / 11 固有フレーム</span></div>
+          </div>
+        </article>
+      </section>
+
+      <footer>
+        <a href="plugin-lifecycle-video-evidence.json">機械検証結果（JSON）</a>
+        ・ <a href="plugin-lifecycle-video-guide.md">収録ガイド（Markdown）</a>
+        <br>公開対象はローカルの新規保存領域で実行した検証です。本番の Cloudflare OS インスタンスへプラグインを配布した映像ではありません。
+      </footer>
+    </main>
+  </body>
+</html>
