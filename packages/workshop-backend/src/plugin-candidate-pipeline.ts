@@ -85,8 +85,12 @@ export class WebCryptoPluginCandidateSigner implements PluginCandidateSigner {
     signature: Uint8Array;
   }> {
     const keys = await this.#keys;
+    const signerPublicKey = await crypto.subtle.exportKey("jwk", keys.publicKey);
+    if (signerPublicKey instanceof ArrayBuffer) {
+      throw new TypeError("Expected a JSON Web Key from JWK export.");
+    }
     return {
-      signerPublicKey: await crypto.subtle.exportKey("jwk", keys.publicKey),
+      signerPublicKey,
       signature: new Uint8Array(await crypto.subtle.sign(
         {name: "ECDSA", hash: "SHA-256"},
         keys.privateKey,

@@ -1,4 +1,7 @@
-import type {StageUserPluginCandidateRequest} from "@gadgets/workshop-shared/api";
+import type {
+  StageUserPluginCandidateRequest,
+  UserPluginCandidateReview,
+} from "@gadgets/workshop-shared/api";
 import type {GeneratedPluginCandidate} from "./plugin-candidate-pipeline.js";
 import type {PluginManifest} from "./plugin-manifest-registry.js";
 
@@ -95,6 +98,37 @@ export async function buildUserAuthoredPluginCandidate(
     artifacts: [
       {codeArtifactDigest: runtimeDigest, code: RUNTIME_SOURCE},
       {codeArtifactDigest: uiDigest, code: uiSource},
+    ],
+  };
+}
+
+/** Projects one generated package into the bounded facts required for admin publication review. */
+export function projectUserPluginCandidateReview(
+    request: StageUserPluginCandidateRequest,
+    candidate: GeneratedPluginCandidate): UserPluginCandidateReview {
+  const manifest = candidate.manifest;
+  const expectedSchemaVersion = request.template === "personal-board" ? 5 : 4;
+  if (manifest.schemaVersion !== expectedSchemaVersion ||
+      (manifest.schemaVersion !== 4 && manifest.schemaVersion !== 5)) {
+    throw new TypeError("Generated candidate does not match its authoring template.");
+  }
+  const contribution = manifest.uiContributions[0];
+  if (!contribution || contribution.renderer.kind === "host-schema-v1") {
+    throw new TypeError("Generated candidate is missing its executable UI contribution.");
+  }
+  return {
+    template: request.template,
+    title: manifest.presentation.title,
+    surfaceTitle: contribution.title,
+    requestedCapabilities: [...manifest.requestedCapabilities],
+    state: manifest.schemaVersion === 5 ? manifest.state.kind : "none",
+    renderer: contribution.renderer.kind,
+    artifactDigests: candidate.artifacts.map(artifact => artifact.codeArtifactDigest),
+    verificationChecks: [
+      "manifest-schema-verified",
+      "artifact-digests-verified",
+      "dynamic-worker-isolation-passed",
+      "candidate-signature-verified",
     ],
   };
 }

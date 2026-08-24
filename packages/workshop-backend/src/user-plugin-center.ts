@@ -59,6 +59,7 @@ function versionOffer(manifest: VerifiedPluginManifest): UserPluginVersionOffer 
     summary: manifest.presentation?.summary ?? "No description provided.",
     requestedCapabilities: [...manifest.requestedCapabilities].toSorted(compareText),
     dependencies: [...manifest.dependencies].toSorted(compareText),
+    hasState: manifest.state?.kind === "installation",
     contributions: [...(manifest.uiContributions ?? [])]
       .filter((contribution): contribution is Extract<
         PluginUiContributionDescriptor,

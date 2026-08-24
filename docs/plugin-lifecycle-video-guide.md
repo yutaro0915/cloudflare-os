@@ -7,11 +7,12 @@ They are not Remotion compositions, slide decks, or screenshot sequences.
    waits for isolated Dynamic Worker checks and signing, publishes the previously hidden exact
    candidate, imports it, and opens its inert worker-rendered UI.
 2. plugin-lifecycle-02-cross-user-import-use.mp4 — the admin creates and publishes a persistent
-   release board, signs out, creates a different user, imports the Store package, adds an item, and
-   moves that item to the Doing column.
-3. plugin-lifecycle-03-safe-uninstall.mp4 — the second user reloads the persisted board state,
-   uninstalls the plugin, observes the separately retained state record, and purges it only through
-   a second explicit destructive confirmation.
+   release board, signs out, signs in as a visibly identified different user, reviews the exact
+   package and capability before importing it, adds an item, moves that item to Doing, and reloads
+   the page to prove that the state persisted.
+3. plugin-lifecycle-03-safe-uninstall.mp4 — the second user begins with the persisted board state,
+   reviews the uninstall consequences, confirms that navigation disappears while state is retained,
+   and purges the retained lifecycle only through a separate irreversible-action review.
 
 The run uses a fresh temporary Wrangler persistence directory, so it never deletes or reuses the
 developer's normal local state. The Store publish shown here is a real publication to that local
@@ -28,5 +29,8 @@ pnpm verify:plugin-lifecycle-videos
 On Linux, Playwright's documented browser system dependencies are required. The recorder also
 accepts PLAYWRIGHT_BROWSER_LIB_DIR for a compatible non-system library directory.
 
-The verifier requires H.264 at 1280×720, a minimum duration, changing sampled frames, and the
-three-scenario browser evidence record in plugin-lifecycle-video-evidence.json.
+The verifier requires H.264 at 1600×900, scenario-specific minimum durations, changing sampled
+frames, and an exact ordered set of visible semantic milestones in
+plugin-lifecycle-video-evidence.json. The recorder also captures one full-resolution review frame
+for each milestone in its temporary work directory so the final videos can be inspected before
+publication.

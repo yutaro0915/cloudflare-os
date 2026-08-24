@@ -40,6 +40,24 @@ describe("authenticated user plugin authoring", () => {
       ok: true,
       candidateId: expect.stringMatching(/^sha256:/),
       manifestDigest: expect.stringMatching(/^sha256:/),
+      review: {
+        template: "personal-board",
+        title: request.title,
+        surfaceTitle: request.surfaceTitle,
+        requestedCapabilities: ["plugin.ui.state.mutate"],
+        state: "installation",
+        renderer: "worker-interactive-document-v1",
+        artifactDigests: [
+          expect.stringMatching(/^sha256:/),
+          expect.stringMatching(/^sha256:/),
+        ],
+        verificationChecks: [
+          "manifest-schema-verified",
+          "artifact-digests-verified",
+          "dynamic-worker-isolation-passed",
+          "candidate-signature-verified",
+        ],
+      },
     });
     if (!staged.ok) throw new Error("Expected staged candidate.");
     expect((await author.getUserPluginCenter()).plugins)

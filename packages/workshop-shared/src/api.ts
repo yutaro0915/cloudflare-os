@@ -322,6 +322,40 @@ export type InstallUserPluginResult = InstallPluginResult;
 /** Host-owned template used to create a bounded, reviewable user plugin package. */
 export type UserPluginAuthoringTemplate = "focus-brief" | "personal-board";
 
+/** Host verification recorded before a candidate can be reviewed for publication. */
+export type UserPluginCandidateVerificationCheck =
+  "manifest-schema-verified" |
+  "artifact-digests-verified" |
+  "dynamic-worker-isolation-passed" |
+  "candidate-signature-verified";
+
+/** Safe exact-package projection shown during the separate admin publication review. */
+export interface UserPluginCandidateReview {
+  /** Host template that produced the executable package. */
+  template: UserPluginAuthoringTemplate;
+
+  /** Presentation title copied into the verified manifest. */
+  title: string;
+
+  /** Surface heading copied into the verified UI artifact. */
+  surfaceTitle: string;
+
+  /** Capabilities an importing user must approve exactly. */
+  requestedCapabilities: string[];
+
+  /** Whether this package owns installation-scoped state. */
+  state: "none" | "installation";
+
+  /** Closed renderer contract exercised by the isolation test. */
+  renderer: "worker-rendered-document-v1" | "worker-interactive-document-v1";
+
+  /** Content addresses of every executable artifact in the immutable candidate. */
+  artifactDigests: string[];
+
+  /** Checks that passed before the Store accepted the unpublished candidate. */
+  verificationChecks: UserPluginCandidateVerificationCheck[];
+}
+
 /** Bounded human input accepted by the trusted plugin authoring gateway. */
 export interface StageUserPluginCandidateRequest {
   /** Host-owned implementation template; arbitrary executable source is never accepted. */
@@ -360,6 +394,9 @@ export type StageUserPluginCandidateResult = {
   /** Exact package identity staged for review. */
   pluginId: string;
   packageVersion: string;
+
+  /** Exact generated-package facts that the admin must inspect before publication. */
+  review: UserPluginCandidateReview;
 } | {
   /** No installable Store package was created. */
   ok: false;
@@ -554,6 +591,9 @@ export interface UserPluginVersionOffer {
 
   /** Plugin identifiers that must already be active. */
   dependencies: string[];
+
+  /** Whether an installed lifecycle owns state that will be retained on uninstall. */
+  hasState: boolean;
 
   /** Safe contribution metadata; sandbox code addresses are omitted. */
   contributions: UserPluginUiContribution[];

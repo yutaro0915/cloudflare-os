@@ -27,6 +27,7 @@ const initialView: UserPluginCenterView = {
       summary: 'Example plugin',
       requestedCapabilities: ['plugin.state.read'],
       dependencies: [],
+      hasState: true,
       contributions: [],
     }],
     installation: {

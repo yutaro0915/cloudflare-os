@@ -66,7 +66,10 @@ import {
   PluginCandidatePipeline,
   WebCryptoPluginCandidateSigner,
 } from "./plugin-candidate-pipeline.js";
-import {buildUserAuthoredPluginCandidate} from "./user-plugin-authoring.js";
+import {
+  buildUserAuthoredPluginCandidate,
+  projectUserPluginCandidateReview,
+} from "./user-plugin-authoring.js";
 
 const logger = createWorkshopLogger("workshop.server");
 
@@ -263,6 +266,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       manifestDigest: staged.manifestDigest,
       pluginId: request.pluginId,
       packageVersion: request.packageVersion,
+      review: projectUserPluginCandidateReview(request, candidate),
     };
   }
   async openUserPluginUiFrame(
