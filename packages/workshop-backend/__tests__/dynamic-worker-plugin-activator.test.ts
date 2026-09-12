@@ -61,6 +61,7 @@ class FakeStarter implements PluginWorkerStarter {
   verifyNeverSettles = false;
   invokeCodeTwice = false;
   invokeNeverSettles = false;
+  disposed = 0;
 
   async start(
       id: string,
@@ -68,6 +69,7 @@ class FakeStarter implements PluginWorkerStarter {
     this.ids.push(id);
     this.definitions.push(await getCode());
     if (this.invokeCodeTwice) this.definitions.push(await getCode());
+    let disposed = false;
     return {
       verify: async () => {
         if (this.verifyError) throw this.verifyError;
@@ -76,6 +78,11 @@ class FakeStarter implements PluginWorkerStarter {
       invoke: async () => {
         if (this.invokeNeverSettles) await new Promise<never>(() => {});
         return undefined;
+      },
+      [Symbol.dispose]: () => {
+        if (disposed) return;
+        disposed = true;
+        this.disposed += 1;
       },
     };
   }
@@ -227,6 +234,9 @@ describe("Dynamic Worker plugin activator", () => {
       .rejects.toThrow("Plugin invocation timed out");
     await vi.advanceTimersByTimeAsync(10_000);
     await invocation;
+    expect(starter.disposed).toBe(1);
+    await expect(activator.invoke(activationKey))
+      .rejects.toThrow("Plugin worker control is unavailable");
   });
 
   it("aborts staging when the fixed entrypoint handshake fails", async () => {
@@ -244,6 +254,7 @@ describe("Dynamic Worker plugin activator", () => {
       .rejects.toThrow("handshake failed");
     expect(gates.selectedKey).toBeUndefined();
     expect(gates.abortedKeys).toEqual(gates.stagedKeys);
+    expect(starter.disposed).toBe(1);
   });
 
   it("times out a handshake that never settles and aborts staging", async () => {
@@ -265,6 +276,24 @@ describe("Dynamic Worker plugin activator", () => {
     await rejection;
     expect(gates.selectedKey).toBeUndefined();
     expect(gates.abortedKeys).toEqual(gates.stagedKeys);
+    expect(starter.disposed).toBe(1);
+  });
+
+  it("disposes the Worker RPC control exactly once during runtime cleanup", async () => {
+    const starter = new FakeStarter();
+    const cleanupSteps: Array<() => void | Promise<void>> = [];
+    const activator = new DynamicWorkerPluginExecutionActivator(
+      REALM,
+      starter,
+      new VerifyingPluginCodeArtifactResolver(new MutableStore()),
+      new FakeGateRegistry(),
+    );
+
+    await activator.prepare(plan(), ATTEMPT, (_label, step) => cleanupSteps.push(step));
+    for (const cleanup of cleanupSteps.toReversed()) await cleanup();
+    for (const cleanup of cleanupSteps.toReversed()) await cleanup();
+
+    expect(starter.disposed).toBe(1);
   });
 
   it("keys warm workers by the complete authority and runtime policy definition", async () => {

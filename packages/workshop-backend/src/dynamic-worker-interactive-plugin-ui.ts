@@ -5,7 +5,7 @@ import type {PluginUiArtifactResolver} from "./dynamic-worker-plugin-ui-renderer
 import type {VerifiedPluginCodeArtifact} from "./plugin-code-artifact.js";
 import type {UserPluginInteractiveDocument} from "@gadgets/workshop-shared/api";
 import {snapshotUserPluginInteractiveDocument} from "./plugin-interactive-ui.js";
-import {runPluginUiRpcWithinDeadline} from "./plugin-ui-rpc-deadline.js";
+import {runPluginRpcWithinDeadline} from "./plugin-rpc-lifetime.js";
 import {WORKER_COMPATIBILITY_DATE} from "./worker-compatibility.js";
 
 const INTERACTIVE_UI_FLAGS = ["disallow_importable_env"] as const;
@@ -184,7 +184,7 @@ export class WorkerLoaderInteractivePluginUiStarter implements InteractivePlugin
     const entrypoint = this.loader.load(await getCode())
       .getEntrypoint<InteractivePluginUiEntrypoint>();
     const pending = entrypoint.interact(request);
-    return runPluginUiRpcWithinDeadline(
+    return runPluginRpcWithinDeadline(
       pending,
       [entrypoint],
       INTERACTIVE_UI_TIMEOUT_MS,

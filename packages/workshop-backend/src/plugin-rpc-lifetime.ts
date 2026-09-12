@@ -1,5 +1,5 @@
 /** Best-effort explicit disposal for native Workers RPC promises, results, and stubs. */
-export function disposePluginUiRpcValue(value: unknown): void {
+export function disposePluginRpcValue(value: unknown): void {
   if (typeof value !== "object" || value === null || !(Symbol.dispose in value)) return;
   const dispose = value[Symbol.dispose];
   if (typeof dispose === "function") dispose.call(value);
@@ -10,7 +10,7 @@ export function disposePluginUiRpcValue(value: unknown): void {
  * timeout is observed by the caller. Disposal is idempotent here because native RPC disposal is
  * an explicit lifetime signal rather than an awaited cleanup operation.
  */
-export async function runPluginUiRpcWithinDeadline<T, Result>(
+export async function runPluginRpcWithinDeadline<T, Result>(
     pending: Promise<T>,
     ownedStubs: readonly object[],
     timeoutMs: number,
@@ -21,8 +21,8 @@ export async function runPluginUiRpcWithinDeadline<T, Result>(
   const cancel = () => {
     if (disposed) return;
     disposed = true;
-    disposePluginUiRpcValue(pending);
-    for (const stub of ownedStubs) disposePluginUiRpcValue(stub);
+    disposePluginRpcValue(pending);
+    for (const stub of ownedStubs) disposePluginRpcValue(stub);
   };
   try {
     const value = await Promise.race([
@@ -37,7 +37,7 @@ export async function runPluginUiRpcWithinDeadline<T, Result>(
     try {
       return consume(value);
     } finally {
-      disposePluginUiRpcValue(value);
+      disposePluginRpcValue(value);
     }
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);

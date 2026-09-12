@@ -11,6 +11,7 @@ import type {
 } from "./plugin-code-artifact.js";
 import type { RuntimePluginPlan } from "./plugin-reconciler.js";
 import { isSupportedPluginRuntimeCapability } from "./plugin-runtime-capabilities.js";
+import { disposePluginRpcValue } from "./plugin-rpc-lifetime.js";
 import { WORKER_COMPATIBILITY_DATE } from "./worker-compatibility.js";
 
 const PLUGIN_HARNESS_ABI = "plugin-harness-v1";
@@ -66,12 +67,15 @@ interface PluginWorkerEntrypoint extends WorkerEntrypoint {
 }
 
 /** Started Dynamic Worker control surface hidden from the domain activator. */
-export interface PluginWorkerControl {
+export interface PluginWorkerControl extends Disposable {
   /** Awaits host harness import, staged-gate verification, and plugin handshake. */
   verify(): Promise<void>;
 
   /** Invokes the fixed active plugin ABI after host gate verification. */
   invoke(): Promise<void>;
+
+  /** Releases the entrypoint RPC stub when activation no longer owns it. */
+  [Symbol.dispose](): void;
 }
 
 /** Deep port that starts one host-composed Dynamic Worker definition. */
@@ -126,9 +130,15 @@ export class WorkerLoaderPluginWorkerStarter implements PluginWorkerStarter {
       id: string,
       getCode: () => Promise<WorkerLoaderWorkerCode>): Promise<PluginWorkerControl> {
     const entrypoint = this.loader.get(id, getCode).getEntrypoint<PluginWorkerEntrypoint>();
+    let disposed = false;
     return {
       verify: () => entrypoint.verify(),
       invoke: () => entrypoint.invoke(),
+      [Symbol.dispose]: () => {
+        if (disposed) return;
+        disposed = true;
+        disposePluginRpcValue(entrypoint);
+      },
     };
   }
 }
@@ -224,16 +234,19 @@ async function verifyWithinDeadline(control: PluginWorkerControl): Promise<void>
   }
 }
 
-async function invokeWithinDeadline(control: PluginWorkerControl): Promise<void> {
+async function invokeWithinDeadline(
+    control: PluginWorkerControl,
+    onTimeout: () => void): Promise<void> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       control.invoke(),
       new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error("Plugin invocation timed out.")),
-          PLUGIN_INVOKE_TIMEOUT_MS,
-        );
+        timeout = setTimeout(() => {
+          control[Symbol.dispose]();
+          onTimeout();
+          reject(new Error("Plugin invocation timed out."));
+        }, PLUGIN_INVOKE_TIMEOUT_MS);
       }),
     ]);
   } finally {
@@ -288,8 +301,9 @@ export class DynamicWorkerPluginExecutionActivator implements PluginExecutionAct
     );
     const gate = this.gates.stage(candidate, activationKey, activationAttemptId);
     addCleanup("plugin-capability-gate", () => gate.abort());
+    let control: PluginWorkerControl | undefined;
     try {
-      const control = await this.starter.start(activationKey, async () => {
+      control = await this.starter.start(activationKey, async () => {
         const result = await this.artifacts.resolve(candidate.runtime.codeArtifactDigest);
         if (!result.ok) throw new Error(`Plugin code artifact rejected: ${result.error}`);
         return workerCode(result.artifact, gate.env);
@@ -297,11 +311,13 @@ export class DynamicWorkerPluginExecutionActivator implements PluginExecutionAct
       this.#controls.set(activationKey, control);
       addCleanup("plugin-worker-control", () => {
         if (this.#controls.get(activationKey) === control) this.#controls.delete(activationKey);
+        control?.[Symbol.dispose]();
       });
       await verifyWithinDeadline(control);
       return gate;
     } catch (error) {
       this.#controls.delete(activationKey);
+      control?.[Symbol.dispose]();
       gate.abort();
       throw error;
     }
@@ -311,7 +327,9 @@ export class DynamicWorkerPluginExecutionActivator implements PluginExecutionAct
   async invoke(activationKey: string): Promise<void> {
     const control = this.#controls.get(activationKey);
     if (control === undefined) throw new Error("Plugin worker control is unavailable.");
-    return invokeWithinDeadline(control);
+    return invokeWithinDeadline(control, () => {
+      if (this.#controls.get(activationKey) === control) this.#controls.delete(activationKey);
+    });
   }
 }
 

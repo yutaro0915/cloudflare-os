@@ -5,7 +5,7 @@ import type {
   ResolvePluginCodeArtifactResult,
   VerifiedPluginCodeArtifact,
 } from "./plugin-code-artifact.js";
-import {runPluginUiRpcWithinDeadline} from "./plugin-ui-rpc-deadline.js";
+import {runPluginRpcWithinDeadline} from "./plugin-rpc-lifetime.js";
 import {WORKER_COMPATIBILITY_DATE} from "./worker-compatibility.js";
 
 const UI_COMPATIBILITY_FLAGS = ["disallow_importable_env"] as const;
@@ -136,7 +136,7 @@ export class WorkerLoaderPluginUiWorkerStarter implements PluginUiWorkerStarter 
   async render(getCode: () => Promise<WorkerLoaderWorkerCode>): Promise<unknown> {
     const entrypoint = this.loader.load(await getCode()).getEntrypoint<PluginUiWorkerEntrypoint>();
     const pending = entrypoint.render();
-    return runPluginUiRpcWithinDeadline(
+    return runPluginRpcWithinDeadline(
       pending,
       [entrypoint],
       UI_RENDER_TIMEOUT_MS,

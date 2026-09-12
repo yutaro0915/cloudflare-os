@@ -1,9 +1,9 @@
 import {afterEach, describe, expect, it, vi} from "vitest";
-import {runPluginUiRpcWithinDeadline} from "../src/plugin-ui-rpc-deadline.js";
+import {runPluginRpcWithinDeadline} from "../src/plugin-rpc-lifetime.js";
 
 afterEach(() => vi.useRealTimers());
 
-describe("plugin UI RPC deadline", () => {
+describe("plugin RPC lifetime", () => {
   it("disposes the in-flight RPC promise and entrypoint before surfacing timeout", async () => {
     vi.useFakeTimers();
     const disposed: string[] = [];
@@ -14,7 +14,7 @@ describe("plugin UI RPC deadline", () => {
     const entrypoint = {
       [Symbol.dispose]: () => disposed.push("entrypoint"),
     };
-    const rejection = expect(runPluginUiRpcWithinDeadline(
+    const rejection = expect(runPluginRpcWithinDeadline(
       pending,
       [entrypoint],
       100,
@@ -42,7 +42,7 @@ describe("plugin UI RPC deadline", () => {
       [Symbol.dispose]: () => disposed.push("entrypoint"),
     };
 
-    await expect(runPluginUiRpcWithinDeadline(
+    await expect(runPluginRpcWithinDeadline(
       pending,
       [entrypoint],
       100,

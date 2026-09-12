@@ -23,7 +23,7 @@ import {
   type PluginStoreDurableObject,
 } from "./plugin-store.js";
 import type {PluginMutationActor} from "./plugin-installation.js";
-import {runPluginUiRpcWithinDeadline} from "./plugin-ui-rpc-deadline.js";
+import {runPluginRpcWithinDeadline} from "./plugin-rpc-lifetime.js";
 import {WORKER_COMPATIBILITY_DATE} from "./worker-compatibility.js";
 
 const CANDIDATE_RUNTIME_TIMEOUT_MS = 5_000;
@@ -190,7 +190,7 @@ export class DynamicWorkerPluginCandidateIsolationTester {
       }).getEntrypoint<RuntimeContractEntrypoint>();
       const pending = entrypoint.verify();
       try {
-        await runPluginUiRpcWithinDeadline(
+        await runPluginRpcWithinDeadline(
           pending,
           [entrypoint],
           this.runtimeTimeoutMs,
