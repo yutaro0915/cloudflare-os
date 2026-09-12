@@ -24,6 +24,7 @@ import {
 } from "./plugin-store.js";
 import type {PluginMutationActor} from "./plugin-installation.js";
 import {runPluginUiRpcWithinDeadline} from "./plugin-ui-rpc-deadline.js";
+import {WORKER_COMPATIBILITY_DATE} from "./worker-compatibility.js";
 
 const CANDIDATE_RUNTIME_TIMEOUT_MS = 5_000;
 
@@ -176,7 +177,7 @@ export class DynamicWorkerPluginCandidateIsolationTester {
       const resolved = await resolver.resolve(digest);
       if (!resolved.ok) return resolved;
       const entrypoint = this.loader.load({
-        compatibilityDate: "2026-02-01",
+        compatibilityDate: WORKER_COMPATIBILITY_DATE,
         compatibilityFlags: ["disallow_importable_env"],
         mainModule: "runtime-contract.js",
         modules: {

@@ -52,6 +52,7 @@ export function applyThemeMode(mode: ThemeMode): ResolvedThemeMode {
   const root = document.documentElement
 
   root.setAttribute('data-mode', resolved)
+  root.setAttribute('data-theme', resolved)
   root.style.colorScheme = resolved
 
   return resolved

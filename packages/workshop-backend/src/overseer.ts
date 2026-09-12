@@ -26,6 +26,7 @@ import { foldProposedChanges, isCompactionTurn, type ChangeBatch } from "./agent
 import { ambientGatekeeperMode } from "./provisioning-policy";
 import { listFeaturedBlueprintsFromKv, readBlueprintContent, readBlueprintKvRecord, sanitizeBlueprintOutput } from "./blueprint-archive";
 import { WebFetchEnv } from "./web-fetch";
+import { WORKER_COMPATIBILITY_DATE } from "./worker-compatibility";
 import { FirecrawlSearchEnv } from "./firecrawl-search";
 import {
   UserDurableObject,
@@ -2466,8 +2467,7 @@ class OverseerImpl implements AgentHooks {
       };
 
       return {
-        // TODO: compatibility date configuration
-        compatibilityDate: "2026-02-01",
+        compatibilityDate: WORKER_COMPATIBILITY_DATE,
         compatibilityFlags: [
           // Make ctx.restore() available.
           "allow_irrevocable_stub_storage",
@@ -5649,7 +5649,7 @@ class OverseerImpl implements AgentHooks {
       };
 
       let workerDef: WorkerLoaderWorkerCode = {
-        compatibilityDate: "2026-02-01",
+        compatibilityDate: WORKER_COMPATIBILITY_DATE,
         compatibilityFlags: [
           // disallow_importable_env also disallows importable ctx.exports, to prevent the code
           // from calling itself in a loop.

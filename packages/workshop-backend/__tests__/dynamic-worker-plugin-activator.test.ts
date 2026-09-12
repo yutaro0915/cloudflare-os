@@ -131,7 +131,7 @@ describe("Dynamic Worker plugin activator", () => {
     expect(store.reads).toBe(2);
     expect(starter.definitions[1]).toEqual(starter.definitions[0]);
     expect(starter.definitions[0]).toMatchObject({
-      compatibilityDate: "2026-02-01",
+      compatibilityDate: "2026-08-07",
       compatibilityFlags: ["disallow_importable_env"],
       mainModule: "plugin-harness.js",
       modules: {"plugin.js": CODE},
@@ -271,7 +271,7 @@ describe("Dynamic Worker plugin activator", () => {
     const base = plan();
     const expected = await pluginActivationKey(REALM, base, ATTEMPT);
     expect(expected).toBe(
-      "plugin-worker:v1:d8ca2c118e057d1273a064129469d576a7b8328ccb43b066389e4989d7b5e3e7",
+      "plugin-worker:v1:25c27921ea470e2bc58746ab1c937526233d882d27e14942a7b5ba16c54e3dd3",
     );
     await expect(pluginActivationKey(structuredClone(REALM), structuredClone(base), ATTEMPT))
       .resolves.toBe(expected);

@@ -6,8 +6,8 @@ import type {VerifiedPluginCodeArtifact} from "./plugin-code-artifact.js";
 import type {UserPluginInteractiveDocument} from "@gadgets/workshop-shared/api";
 import {snapshotUserPluginInteractiveDocument} from "./plugin-interactive-ui.js";
 import {runPluginUiRpcWithinDeadline} from "./plugin-ui-rpc-deadline.js";
+import {WORKER_COMPATIBILITY_DATE} from "./worker-compatibility.js";
 
-const INTERACTIVE_UI_COMPATIBILITY_DATE = "2026-02-01";
 const INTERACTIVE_UI_FLAGS = ["disallow_importable_env"] as const;
 const INTERACTIVE_UI_LIMITS = {cpuMs: 50, subRequests: 1} as const;
 const INTERACTIVE_UI_TIMEOUT_MS = 5_000;
@@ -199,7 +199,7 @@ function workerCode(artifact: VerifiedPluginCodeArtifact): WorkerLoaderWorkerCod
     throw new RangeError("Interactive plugin UI artifact exceeds the host runtime limit.");
   }
   return {
-    compatibilityDate: INTERACTIVE_UI_COMPATIBILITY_DATE,
+    compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: [...INTERACTIVE_UI_FLAGS],
     mainModule: "plugin-ui-harness.js",
     modules: {

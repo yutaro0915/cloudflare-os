@@ -71,7 +71,7 @@ const reviewView: UserPluginCenterView = {
       title: 'Available Board',
       summary: 'Published by another user.',
       requestedCapabilities: ['plugin.ui.state.mutate'],
-      dependencies: [],
+      dependencies: ['foundation.identity'],
       hasState: true,
       contributions: [],
     }],
@@ -178,6 +178,7 @@ describe('PluginsPage crash recovery actions', () => {
     await act(async () => buttons().find(button => button.textContent?.trim() === 'Import')!.click())
     expect(container.textContent).toContain('Review exact package before import')
     expect(container.textContent).toContain('plugin.ui.state.mutate')
+    expect(container.textContent).toContain('foundation.identity')
     expect(container.textContent).toContain('State is retained until a separate purge.')
     await act(async () => buttons().find(button => button.textContent?.includes('Approve capabilities'))!.click())
     expect(mocks.install).toHaveBeenCalledWith({
@@ -200,5 +201,33 @@ describe('PluginsPage crash recovery actions', () => {
     expect(container.textContent).toContain('separate from uninstall and cannot be undone')
     await act(async () => buttons().find(button => button.textContent?.includes('Permanently purge'))!.click())
     expect(mocks.purge).toHaveBeenCalledWith({installationId: 'detached-lifecycle'})
+  })
+
+  it('reports failed mutations in context without browser alert dialogs', async () => {
+    mocks.view = reviewView
+    mocks.install.mockRejectedValueOnce(new Error('offline'))
+    mocks.uninstall.mockRejectedValueOnce(new Error('offline'))
+    mocks.purge.mockRejectedValueOnce(new Error('offline'))
+    const alert = vi.fn<(message?: unknown) => void>()
+    vi.stubGlobal('alert', alert)
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => root!.render(<PluginsPage />))
+
+    const buttons = () => [...container!.querySelectorAll('button')]
+    await act(async () => buttons().find(button => button.textContent?.trim() === 'Import')!.click())
+    await act(async () => buttons().find(button => button.textContent?.includes('Approve capabilities'))!.click())
+    expect(container.textContent).toContain('could not be imported')
+
+    await act(async () => buttons().find(button => button.textContent?.trim() === 'Uninstall')!.click())
+    await act(async () => buttons().find(button => button.textContent?.includes('Uninstall and retain'))!.click())
+    expect(container.textContent).toContain('could not be uninstalled')
+
+    await act(async () => buttons().find(button => button.textContent?.trim() === 'Purge data')!.click())
+    await act(async () => buttons().find(button => button.textContent?.includes('Permanently purge'))!.click())
+    expect(container.textContent).toContain('could not be purged')
+    expect(container.querySelectorAll('[role="alert"]')).toHaveLength(3)
+    expect(alert).not.toHaveBeenCalled()
   })
 })

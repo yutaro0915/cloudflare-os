@@ -1,0 +1,71 @@
+{
+  "$schema": "https://www.designtokens.org/schemas/2025.10/format.json",
+  "primitive": {
+    "color": {
+      "white": {"$type": "color", "$description": "Pure white for inverse foregrounds and controls.", "$value": {"colorSpace": "srgb", "components": [1, 1, 1], "hex": "#ffffff"}},
+      "canvas": {"$type": "color", "$description": "Default application canvas.", "$value": {"colorSpace": "srgb", "components": [0.988235, 0.988235, 0.984314], "hex": "#fcfcfb"}},
+      "elevated": {"$type": "color", "$description": "Elevated neutral surface.", "$value": {"colorSpace": "srgb", "components": [0.972549, 0.972549, 0.968627], "hex": "#f8f8f7"}},
+      "tint": {"$type": "color", "$description": "Subtle neutral tint.", "$value": {"colorSpace": "srgb", "components": [0.952941, 0.952941, 0.945098], "hex": "#f3f3f1"}},
+      "overlay": {"$type": "color", "$description": "Opaque overlay surface.", "$value": {"colorSpace": "srgb", "components": [0.984314, 0.984314, 0.980392], "hex": "#fbfbfa"}},
+      "recessed": {"$type": "color", "$description": "Recessed neutral surface.", "$value": {"colorSpace": "srgb", "components": [0.937255, 0.933333, 0.92549], "hex": "#efeeec"}},
+      "control": {"$type": "color", "$description": "Interactive control surface.", "$value": {"colorSpace": "srgb", "components": [1, 1, 1], "hex": "#ffffff"}},
+      "contrast": {"$type": "color", "$description": "High-contrast surface and foreground.", "$value": {"colorSpace": "srgb", "components": [0.078431, 0.066667, 0.058824], "hex": "#14110f"}},
+      "fill": {"$type": "color", "$description": "Default neutral fill.", "$value": {"colorSpace": "srgb", "components": [0.909804, 0.905882, 0.894118], "hex": "#e8e7e4"}},
+      "fill-hover": {"$type": "color", "$description": "Hovered neutral fill.", "$value": {"colorSpace": "srgb", "components": [0.870588, 0.870588, 0.858824], "hex": "#dededb"}},
+      "interact": {"$type": "color", "$description": "Interactive outline and focus neutral.", "$value": {"colorSpace": "srgb", "components": [0.792157, 0.784314, 0.764706], "hex": "#cac8c3"}},
+      "user-bubble": {"$type": "color", "$description": "User chat bubble surface.", "$value": {"colorSpace": "srgb", "components": [0.945098, 0.941176, 0.933333], "hex": "#f1f0ee"}},
+      "brand": {"$type": "color", "$description": "Primary intentional action color.", "$value": {"colorSpace": "srgb", "components": [1, 0.282353, 0.003922], "hex": "#ff4801"}},
+      "brand-hover": {"$type": "color", "$description": "Primary action hover color.", "$value": {"colorSpace": "srgb", "components": [0.878431, 0.247059, 0], "hex": "#e03f00"}},
+      "brand-text": {"$type": "color", "$description": "Brand color adjusted for readable text.", "$value": {"colorSpace": "srgb", "components": [1, 0.282353, 0.003922], "hex": "#ff4801"}},
+      "line": {"$type": "color", "$description": "Neutral hairline border.", "$value": {"colorSpace": "srgb", "components": [0.078431, 0.066667, 0.062745], "alpha": 0.058824, "hex": "#141110"}},
+      "focus": {"$type": "color", "$description": "Keyboard focus outline.", "$value": {"colorSpace": "srgb", "components": [0.792157, 0.784314, 0.764706], "hex": "#cac8c3"}},
+      "text-default": {"$type": "color", "$description": "Default readable foreground.", "$value": {"colorSpace": "srgb", "components": [0.109804, 0.101961, 0.094118], "hex": "#1c1a18"}},
+      "text-hover": {"$type": "color", "$description": "Hovered readable foreground.", "$value": {"colorSpace": "srgb", "components": [0.062745, 0.058824, 0.05098], "hex": "#100f0d"}},
+      "text-strong": {"$type": "color", "$description": "Strong readable foreground.", "$value": {"colorSpace": "srgb", "components": [0.062745, 0.058824, 0.05098], "hex": "#100f0d"}},
+      "text-subtle": {"$type": "color", "$description": "Secondary foreground.", "$value": {"colorSpace": "oklch", "components": [0.52, 0.006, 60]}},
+      "text-inactive": {"$type": "color", "$description": "Inactive foreground.", "$value": {"colorSpace": "oklch", "components": [0.66, 0.005, 60]}}
+    }
+  },
+  "semantic": {
+    "color": {
+      "background": {
+        "canvas": {"$type": "color", "$description": "Application canvas.", "$value": "{primitive.color.canvas}"},
+        "elevated": {"$type": "color", "$description": "Elevated application surface.", "$value": "{primitive.color.elevated}"},
+        "tint": {"$type": "color", "$description": "Tinted application surface.", "$value": "{primitive.color.tint}"},
+        "overlay": {"$type": "color", "$description": "Overlay application surface.", "$value": "{primitive.color.overlay}"},
+        "recessed": {"$type": "color", "$description": "Recessed application surface.", "$value": "{primitive.color.recessed}"},
+        "control": {"$type": "color", "$description": "Control surface.", "$value": "{primitive.color.control}"},
+        "fill": {"$type": "color", "$description": "Neutral fill.", "$value": "{primitive.color.fill}"},
+        "fill-hover": {"$type": "color", "$description": "Hovered neutral fill.", "$value": "{primitive.color.fill-hover}"},
+        "user-bubble": {"$type": "color", "$description": "User chat bubble.", "$value": "{primitive.color.user-bubble}"}
+      },
+      "foreground": {
+        "contrast": {"$type": "color", "$description": "High-contrast foreground or surface.", "$value": "{primitive.color.contrast}"},
+        "default": {"$type": "color", "$description": "Default readable foreground.", "$value": "{primitive.color.text-default}"},
+        "default-hover": {"$type": "color", "$description": "Hovered readable foreground.", "$value": "{primitive.color.text-hover}"},
+        "strong": {"$type": "color", "$description": "Strong foreground.", "$value": "{primitive.color.text-strong}"},
+        "subtle": {"$type": "color", "$description": "Secondary foreground.", "$value": "{primitive.color.text-subtle}"},
+        "inactive": {"$type": "color", "$description": "Inactive foreground.", "$value": "{primitive.color.text-inactive}"},
+        "inverse": {"$type": "color", "$description": "Foreground on contrast surfaces.", "$value": "{primitive.color.white}"}
+      },
+      "action": {
+        "brand": {"$type": "color", "$description": "Primary intentional action.", "$value": "{primitive.color.brand}"},
+        "brand-hover": {"$type": "color", "$description": "Primary intentional action hover.", "$value": "{primitive.color.brand-hover}"},
+        "brand-text": {"$type": "color", "$description": "Readable brand foreground.", "$value": "{primitive.color.brand-text}"}
+      },
+      "border": {
+        "default": {"$type": "color", "$description": "Default hairline border.", "$value": "{primitive.color.line}"},
+        "interactive": {"$type": "color", "$description": "Interactive control border.", "$value": "{primitive.color.interact}"},
+        "focus": {"$type": "color", "$description": "Keyboard focus ring.", "$value": "{primitive.color.focus}"}
+      }
+    }
+  },
+  "component": {
+    "plugin-store": {
+      "card-background": {"$type": "color", "$description": "Plugin Store catalog card surface.", "$value": "{semantic.color.background.canvas}"},
+      "card-border": {"$type": "color", "$description": "Plugin Store catalog card border.", "$value": "{semantic.color.border.default}"},
+      "review-background": {"$type": "color", "$description": "Plugin Store exact-package review surface.", "$value": "{semantic.color.background.tint}"},
+      "review-border": {"$type": "color", "$description": "Plugin Store exact-package review border.", "$value": "{semantic.color.action.brand}"}
+    }
+  }
+}

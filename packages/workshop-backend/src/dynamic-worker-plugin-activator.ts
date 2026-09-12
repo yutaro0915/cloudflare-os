@@ -11,9 +11,9 @@ import type {
 } from "./plugin-code-artifact.js";
 import type { RuntimePluginPlan } from "./plugin-reconciler.js";
 import { isSupportedPluginRuntimeCapability } from "./plugin-runtime-capabilities.js";
+import { WORKER_COMPATIBILITY_DATE } from "./worker-compatibility.js";
 
 const PLUGIN_HARNESS_ABI = "plugin-harness-v1";
-const PLUGIN_COMPATIBILITY_DATE = "2026-02-01";
 const PLUGIN_COMPATIBILITY_FLAGS = ["disallow_importable_env"] as const;
 const PLUGIN_LIMITS = {cpuMs: 50, subRequests: 16} as const;
 const PLUGIN_RUNTIME_POLICY = "default-deny-v1";
@@ -195,7 +195,7 @@ export async function pluginActivationKey(
     stateRef: plan.installation.stateRef ?? null,
     harnessAbi: PLUGIN_HARNESS_ABI,
     harnessSource: PLUGIN_HARNESS,
-    compatibilityDate: PLUGIN_COMPATIBILITY_DATE,
+    compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: PLUGIN_COMPATIBILITY_FLAGS,
     limits: PLUGIN_LIMITS,
     maxArtifactBytes: MAX_PLUGIN_ARTIFACT_BYTES,
@@ -248,7 +248,7 @@ function workerCode(
     throw new RangeError("Plugin code artifact exceeds the host runtime limit.");
   }
   return {
-    compatibilityDate: PLUGIN_COMPATIBILITY_DATE,
+    compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: [...PLUGIN_COMPATIBILITY_FLAGS],
     mainModule: "plugin-harness.js",
     modules: {
