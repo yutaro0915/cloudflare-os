@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 4,
+  "pluginId": "test.ui-center",
+  "packageVersion": "1.0.0",
+  "requestedCapabilities": [],
+  "dependencies": [],
+  "runtime": {
+    "kind": "dynamic-worker",
+    "codeArtifactDigest": "sha256:3c13c2a7eb60e6ee4af19a2944146f10f212f01ebd7247f5214b17ec4c33c1aa"
+  },
+  "presentation": {
+    "title": "UI Center Test",
+    "summary": "Exercises trusted and worker-rendered plugin UI contributions."
+  },
+  "uiContributions": [
+    {
+      "contributionId": "details",
+      "slot": "user-plugin.details",
+      "title": "Trusted details",
+      "renderer": {
+        "kind": "host-schema-v1",
+        "document": {
+          "schemaVersion": 1,
+          "blocks": [
+            {"kind": "text", "text": "Rendered by the host"},
+            {"kind": "notice", "tone": "info", "text": "No plugin HTML is trusted."},
+            {"kind": "list", "items": ["One", "Two"]}
+          ]
+        }
+      }
+    },
+    {
+      "contributionId": "sandbox",
+      "slot": "user-plugin.details",
+      "title": "Worker-rendered surface",
+      "renderer": {
+        "kind": "worker-rendered-document-v1",
+        "codeArtifactDigest": "sha256:a288594fd160ce4c8facd45c18243ad2f2b479556681dfab2d64897eac102212",
+        "height": 240
+      }
+    },
+    {
+      "contributionId": "hung-render",
+      "slot": "user-plugin.details",
+      "title": "Hung renderer probe",
+      "renderer": {
+        "kind": "worker-rendered-document-v1",
+        "codeArtifactDigest": "sha256:8d18e669ba4e64e7141d11bd4bedaac9cadd4c221954d6c711b325fa19fb85b6",
+        "height": 180
+      }
+    },
+    {
+      "contributionId": "prototype-poison",
+      "slot": "user-plugin.details",
+      "title": "Prototype poisoning probe",
+      "renderer": {
+        "kind": "worker-rendered-document-v1",
+        "codeArtifactDigest": "sha256:2a539ee8da18ce69cf78974489ef9a39107a06f31e2bef34b551b1929d96cca2",
+        "height": 180
+      }
+    }
+  ]
+}

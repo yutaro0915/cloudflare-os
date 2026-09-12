@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 3,
+  "pluginId": "test.runtime-metadata",
+  "packageVersion": "1.0.0",
+  "requestedCapabilities": ["plugin.state.read", "workspace.metadata.read"],
+  "dependencies": [],
+  "runtime": {
+    "kind": "dynamic-worker",
+    "codeArtifactDigest": "sha256:a833c623442ed709952679c4925efcaf06835e1d5cf394b5f422fffdc0ebb552"
+  }
+}

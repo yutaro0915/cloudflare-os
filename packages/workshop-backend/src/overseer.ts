@@ -1,6 +1,6 @@
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
-import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, type AgentDefinition, type AgentBindingRef } from '@gadgets/workshop-shared/api';
+import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, CodeUpdate, CodeSubscriber, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, type AgentDefinition, type AgentBindingRef, type InstallPluginRequest, type InstallWorkspacePluginResult, type UninstallWorkspacePluginRequest, type UninstallWorkspacePluginResult, type DetachedWorkspacePluginStateSummary, type PurgeWorkspacePluginStateRequest, type PurgeWorkspacePluginStateResult, type PluginRuntimeStatusView } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, HookInitiator, ResourceDescription, ApprovalQueue, ActionDescription, ObservationAuthorizer, ObservationDescription, VendorDescription, SupportedResource, resolveRequestedResource, HookController, HookDescription, AGENT_CATALOG_MAX_ENTRIES, ActionKind } from "@gadgets/workshop-shared/gatekeeper";
 import {
   DurableObject, WorkerEntrypoint, RpcStub as NativeRpcStub,
@@ -26,8 +26,14 @@ import { foldProposedChanges, isCompactionTurn, type ChangeBatch } from "./agent
 import { ambientGatekeeperMode } from "./provisioning-policy";
 import { listFeaturedBlueprintsFromKv, readBlueprintContent, readBlueprintKvRecord, sanitizeBlueprintOutput } from "./blueprint-archive";
 import { WebFetchEnv } from "./web-fetch";
+import { WORKER_COMPATIBILITY_DATE } from "./worker-compatibility";
 import { FirecrawlSearchEnv } from "./firecrawl-search";
-import { UserDurableObject, UserAiModelRecord, type UserChatContext, type WorkspaceOutputEntry } from "./user";
+import {
+  UserDurableObject,
+  UserAiModelRecord,
+  type UserChatContext,
+  type WorkspaceOutputEntry,
+} from "./user";
 import { AgentSpawnerBinding } from "./agent-spawner-binding";
 import { recordAnalytics } from "./analytics";
 import { reportIssue } from "@gadgets/backend-utils/error-reporting";
@@ -46,6 +52,47 @@ import {
   validateChatAttachmentUpload,
 } from "./chat-attachment-validation";
 import { renderGadgetPdf } from "./browser-export";
+import {isUserOnlyPluginManifest} from "./plugin-manifest-registry.js";
+import {
+  createPluginStoreCodeArtifactResolver,
+  createPluginStoreManifestCatalog,
+} from "./plugin-store-resolvers.js";
+import {
+  WorkerLoaderPluginWorkerStarter,
+  type PluginRuntimeRealmIdentity,
+} from "./dynamic-worker-plugin-activator.js";
+import {
+  PluginRuntimeRealms,
+  type PluginRuntimeAuditEvent,
+  type PluginRuntimeRealmSession,
+} from "./plugin-runtime-realms.js";
+import { ReconciledPluginRuntimeRealm } from "./reconciled-plugin-runtime-realm.js";
+import {
+  makePluginRuntimeCapabilityEnv,
+  type PluginWorkspaceMetadata,
+} from "./plugin-runtime-capability-env.js";
+import {
+  decodePluginRuntimePolicySnapshot,
+  decodeUserPluginInstallationSnapshot,
+  isPluginRuntimeCapabilityAuthorized,
+  isPluginRuntimeCandidateCurrent,
+  resolveApprovedPluginManifest,
+  type DeploymentPluginInstallationRecord,
+  type UserPluginInstallation,
+  type PluginRuntimeCapabilityClaim,
+  type PluginRuntimeCandidateClaim,
+  type PluginRuntimeLifecycleClaim,
+  isPluginRuntimeLifecycleAuthorized,
+  type WorkspacePluginAuditEvent,
+  type WorkspacePluginInstallationRecord,
+  type WorkspacePluginInstallationRevocation,
+  type DetachedWorkspacePluginStateRecord,
+  type WorkspacePluginStatePurge,
+  type BeginWorkspacePluginUninstallResult,
+  type FinalizeWorkspacePluginUninstallResult,
+  type BeginWorkspacePluginStatePurgeResult,
+  type FinalizeWorkspacePluginStatePurgeResult,
+} from "./plugin-installation.js";
 
 const logger = createWorkshopLogger("workshop.overseer");
 export const AGENT_RUNNING_ERROR_MESSAGE = "Agent is running, wait for it to finish.";
@@ -724,6 +771,8 @@ function makeOverseerStorage(storage: DurableObjectStorage) {
       nextGatekeeperId: 0,
 
       nextActionId: 0,
+      nextWorkspacePluginAuditSequence: 0,
+      nextPluginRuntimeAuditSequence: 0,
       nextChatId: 0,
       nextHookId: 0,
 
@@ -787,6 +836,30 @@ function makeOverseerStorage(storage: DurableObjectStorage) {
 
       actions: collection<ActionRecord>()({
         primaryKey: "id"
+      }),
+
+      workspacePluginInstallations: collection<WorkspacePluginInstallationRecord>()({
+        primaryKey: "pluginId",
+      }),
+
+      workspacePluginAuditEvents: collection<WorkspacePluginAuditEvent>()({
+        primaryKey: "sequence",
+      }),
+
+      pluginRuntimeAuditEvents: collection<PluginRuntimeAuditEvent>()({
+        primaryKey: "sequence",
+      }),
+
+      workspacePluginRevocations: collection<WorkspacePluginInstallationRevocation>()({
+        primaryKey: "installationId",
+      }),
+
+      detachedWorkspacePluginStates: collection<DetachedWorkspacePluginStateRecord>()({
+        primaryKey: "installationId",
+      }),
+
+      workspacePluginStatePurges: collection<WorkspacePluginStatePurge>()({
+        primaryKey: "installationId",
       }),
 
       boundHooks: collection<BoundHookRecord>()({
@@ -1020,6 +1093,9 @@ class OverseerImpl implements AgentHooks {
   ownerProfileId?: string;
 
   users: DurableObjectNamespace<UserDurableObject>;
+
+  /** Isolate-local runtime projections keyed by authenticated user and effective role. */
+  readonly pluginRuntimeRealms: PluginRuntimeRealms;
 
   // Tracks the size of the most-recent snapshot, and the size of all incremental updates since,
   // in order to help decide when to make a new snapshot.
@@ -1307,6 +1383,15 @@ class OverseerImpl implements AgentHooks {
     this.storage = makeOverseerStorage(ctx.storage);
     this.users = this.ctx.exports.UserDurableObject;
     this.ownerId = this.storage.ownerId.get();
+    this.pluginRuntimeRealms = new PluginRuntimeRealms(
+      this.ctx.id.toString(),
+      identity => this.#createPluginRuntimeRealm(identity),
+      cleanup => this.ctx.waitUntil(cleanup),
+      error => this.logger.warn("plugin runtime realm operation failed", {
+        event: "plugin.runtime.realm.operation.failed",
+        error,
+      }),
+    );
 
     // Run any pending storage migration before anything else can touch storage. This must happen
     // in the constructor (not just open()) because the DO also wakes via constructor-driven
@@ -1361,6 +1446,88 @@ class OverseerImpl implements AgentHooks {
         this.#deliverWaitingExternalMessageResponse(thread.id);
       }
     }
+  }
+
+  #createPluginRuntimeRealm(identity: PluginRuntimeRealmIdentity): ReconciledPluginRuntimeRealm {
+    const workspaceId = this.ctx.id.toString();
+    const user = this.users.get(this.users.idFromString(identity.userId));
+    const adminSettings = this.ctx.exports.AdminSettings.getByName("");
+    const pluginStore = this.ctx.exports.PluginStoreDurableObject.getByName("");
+    const assertTargets = (
+        deployment: DeploymentPluginInstallationRecord[],
+        workspace: WorkspacePluginInstallationRecord[],
+        personal: UserPluginInstallation[]): void => {
+      if (deployment.some(record =>
+        record.scope !== "deployment" || record.targetId !== adminSettings.id.toString())) {
+        throw new Error("Deployment plugin desired state has an invalid owner target.");
+      }
+      if (workspace.some(record =>
+        record.scope !== "workspace" || record.targetId !== workspaceId)) {
+        throw new Error("Workspace plugin desired state has an invalid owner target.");
+      }
+      if (personal.some(record =>
+        record.scope !== "user" || record.targetId !== identity.userId)) {
+        throw new Error("User plugin desired state has an invalid owner target.");
+      }
+    };
+
+    return new ReconciledPluginRuntimeRealm({
+      identity,
+      readControlState: async () => {
+        const [personalSnapshot, policySnapshot] = await Promise.all([
+          user.readUserPluginInstallationsSnapshotForRuntimeHost(),
+          adminSettings.readPluginRuntimePolicySnapshotForHost(),
+        ]);
+        const personal = decodeUserPluginInstallationSnapshot(
+          personalSnapshot,
+          identity.userId,
+        );
+        const policy = decodePluginRuntimePolicySnapshot(
+          policySnapshot,
+          adminSettings.id.toString(),
+        );
+        const deployment = policy.deployment;
+        const workspace = Array.from(this.storage.workspacePluginInstallations.list()).filter(
+          installation => this.storage.workspacePluginRevocations.get(
+            installation.installationId,
+          ) === undefined,
+        );
+        assertTargets(deployment, workspace, personal);
+        return {
+          desiredState: {deployment, workspace, user: personal},
+          deniedManifestDigests: policy.deniedManifestDigests,
+        };
+      },
+      manifests: Promise.resolve(createPluginStoreManifestCatalog(pluginStore)),
+      artifacts: createPluginStoreCodeArtifactResolver(pluginStore),
+      starter: new WorkerLoaderPluginWorkerStarter(this.env.LOADER),
+      makeCapabilityEnv: (plan, activationKey) => makePluginRuntimeCapabilityEnv(
+        identity,
+        plan,
+        activationKey,
+        {
+          pluginHost: props => this.ctx.exports.PluginRuntimeLoopback({props}),
+          workspaceMetadata: props =>
+            this.ctx.exports.PluginWorkspaceMetadataCapability({props}),
+          pluginState: props => this.ctx.exports.PluginStateReadCapability({props}),
+        },
+      ),
+      recordStatus: (action, status) => {
+        this.ctx.storage.transactionSync(() => {
+          const sequence = this.storage.nextPluginRuntimeAuditSequence.get();
+          this.storage.pluginRuntimeAuditEvents.put({
+            schemaVersion: 1,
+            sequence,
+            action,
+            realmUserId: identity.userId,
+            realmRole: identity.role,
+            status,
+            recordedAt: Date.now(),
+          });
+          this.storage.nextPluginRuntimeAuditSequence.put(sequence + 1);
+        });
+      },
+    });
   }
 
   // =======================================================================================
@@ -2300,8 +2467,7 @@ class OverseerImpl implements AgentHooks {
       };
 
       return {
-        // TODO: compatibility date configuration
-        compatibilityDate: "2026-02-01",
+        compatibilityDate: WORKER_COMPATIBILITY_DATE,
         compatibilityFlags: [
           // Make ctx.restore() available.
           "allow_irrevocable_stub_storage",
@@ -5483,7 +5649,7 @@ class OverseerImpl implements AgentHooks {
       };
 
       let workerDef: WorkerLoaderWorkerCode = {
-        compatibilityDate: "2026-02-01",
+        compatibilityDate: WORKER_COMPATIBILITY_DATE,
         compatibilityFlags: [
           // disallow_importable_env also disallows importable ctx.exports, to prevent the code
           // from calling itself in a loop.
@@ -6426,6 +6592,318 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     return this.impl.outputsSnapshot();
   }
 
+  /** Lists workspace plugin desired state for trusted host orchestration and tests. */
+  async listWorkspacePluginInstallationsForHost(): Promise<WorkspacePluginInstallationRecord[]> {
+    return Array.from(this.impl.storage.workspacePluginInstallations.list());
+  }
+
+  /** Returns only non-revoked workspace desired state for runtime reconstruction. */
+  async readWorkspacePluginInstallationsSnapshotForRuntimeHost(): Promise<unknown> {
+    return Array.from(this.impl.storage.workspacePluginInstallations.list()).filter(
+      installation => this.impl.storage.workspacePluginRevocations.get(
+        installation.installationId,
+      ) === undefined,
+    );
+  }
+
+  /** Lists host-only detached workspace state records including their opaque references. */
+  async listDetachedWorkspacePluginStatesForHost():
+      Promise<DetachedWorkspacePluginStateRecord[]> {
+    return Array.from(this.impl.storage.detachedWorkspacePluginStates.list());
+  }
+
+  /** Lists workspace plugin audit events for trusted host orchestration and tests. */
+  async listWorkspacePluginAuditEventsForHost(): Promise<WorkspacePluginAuditEvent[]> {
+    return Array.from(this.impl.storage.workspacePluginAuditEvents.list());
+  }
+
+  /** Lists append-only realm status and failure events for trusted operations and tests. */
+  async listPluginRuntimeAuditEventsForHost(): Promise<PluginRuntimeAuditEvent[]> {
+    return Array.from(this.impl.storage.pluginRuntimeAuditEvents.list());
+  }
+
+  /** Verifies one host-minted Dynamic Worker gate claim against the current realm generation. */
+  assertPluginRuntimeGateForHost(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string,
+      phase: "staged" | "active"): void {
+    this.impl.pluginRuntimeRealms.assertGate(
+      identity, pluginId, activationKey, manifestDigest, phase,
+    );
+  }
+
+  /** Revalidates an exact staged candidate against owner SSOT before it may commit. */
+  async authorizeStagedPluginRuntimeForHost(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): Promise<void> {
+    const authority = this.impl.pluginRuntimeRealms.stagedInstallationAuthority(
+      identity, pluginId, activationKey, manifestDigest,
+    );
+    if (authority === undefined) throw new Error("Plugin runtime gate denied.");
+    const installation = authority.installation;
+    const claim: PluginRuntimeCandidateClaim = {
+      scope: installation.scope,
+      targetId: installation.targetId,
+      installationId: installation.installationId,
+      pluginId: installation.pluginId,
+      packageVersion: installation.packageVersion,
+      manifestDigest: installation.manifestDigest,
+      grantedCapabilities: [...installation.grantedCapabilities],
+      config: structuredClone(installation.config),
+      ...(installation.stateRef === undefined ? {} : {stateRef: installation.stateRef}),
+    };
+    let authorized = false;
+    if (claim.scope === "workspace") {
+      const current = this.impl.storage.workspacePluginInstallations.get(claim.pluginId);
+      authorized = claim.targetId === this.ctx.id.toString() && current !== undefined &&
+        this.impl.storage.workspacePluginRevocations.get(current.installationId) === undefined &&
+        isPluginRuntimeCandidateCurrent(current, claim);
+    } else if (claim.scope === "user") {
+      authorized = claim.targetId === identity.userId &&
+        await this.impl.users.get(this.impl.users.idFromString(claim.targetId))
+          .authorizePluginCandidateForRuntimeHost(claim);
+    } else {
+      const adminSettings = this.ctx.exports.AdminSettings.getByName("");
+      authorized = claim.targetId === adminSettings.id.toString() &&
+        await adminSettings.authorizePluginCandidateForRuntimeHost(claim);
+    }
+    if (!authorized || this.impl.pluginRuntimeRealms.stagedInstallationAuthority(
+      identity, pluginId, activationKey, manifestDigest,
+    ) === undefined) {
+      this.impl.pluginRuntimeRealms.denyStagedPlugin(
+        identity, pluginId, activationKey, manifestDigest,
+      );
+      throw new Error("Plugin runtime candidate is no longer current.");
+    }
+  }
+
+  /** Revalidates the owning lifecycle before the fixed harness enters untrusted plugin code. */
+  async authorizeActivePluginRuntimeForHost(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): Promise<void> {
+    const authority = this.impl.pluginRuntimeRealms.activeInstallationAuthority(
+      identity, pluginId, activationKey, manifestDigest,
+    );
+    if (authority === undefined) throw new Error("Plugin runtime gate denied.");
+    const installation = authority.installation;
+    const claim: PluginRuntimeLifecycleClaim = {
+      scope: installation.scope,
+      targetId: installation.targetId,
+      installationId: installation.installationId,
+      pluginId: installation.pluginId,
+    };
+    let authorized = false;
+    if (claim.scope === "workspace") {
+      const current = this.impl.storage.workspacePluginInstallations.get(claim.pluginId);
+      authorized = claim.targetId === this.ctx.id.toString() && current !== undefined &&
+        this.impl.storage.workspacePluginRevocations.get(current.installationId) === undefined &&
+        isPluginRuntimeLifecycleAuthorized(current, claim);
+    } else if (claim.scope === "user") {
+      authorized = claim.targetId === identity.userId &&
+        await this.impl.users.get(this.impl.users.idFromString(claim.targetId))
+          .authorizePluginLifecycleForRuntimeHost(claim);
+    } else {
+      const adminSettings = this.ctx.exports.AdminSettings.getByName("");
+      authorized = claim.targetId === adminSettings.id.toString() &&
+        await adminSettings.authorizePluginLifecycleForRuntimeHost(claim);
+    }
+    if (!authorized || this.impl.pluginRuntimeRealms.activeInstallationAuthority(
+      identity, pluginId, activationKey, manifestDigest,
+    ) === undefined) {
+      this.impl.pluginRuntimeRealms.denyPlugin(
+        identity, pluginId, activationKey, manifestDigest,
+      );
+      throw new Error("Plugin runtime lifecycle is no longer authorized.");
+    }
+  }
+
+  /** Revalidates owner SSOT and an exact active grant before returning minimal metadata. */
+  async readPluginWorkspaceMetadataForRuntimeHost(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): Promise<PluginWorkspaceMetadata> {
+    const authority = this.impl.pluginRuntimeRealms.activeCapabilityAuthority(
+      identity,
+      pluginId,
+      activationKey,
+      manifestDigest,
+      "workspace.metadata.read",
+    );
+    if (authority === undefined) throw new Error("Plugin runtime capability denied.");
+    const installation = authority.installation;
+    const claim: PluginRuntimeCapabilityClaim = {
+      scope: installation.scope,
+      targetId: installation.targetId,
+      installationId: installation.installationId,
+      pluginId: installation.pluginId,
+      manifestDigest: installation.manifestDigest,
+      capability: "workspace.metadata.read",
+      phase: authority.phase,
+    };
+    let authorized = false;
+    if (claim.scope === "workspace") {
+      const current = this.impl.storage.workspacePluginInstallations.get(claim.pluginId);
+      authorized = claim.targetId === this.ctx.id.toString() && current !== undefined &&
+        this.impl.storage.workspacePluginRevocations.get(current.installationId) === undefined &&
+        isPluginRuntimeCapabilityAuthorized(current, claim);
+    } else if (claim.scope === "user") {
+      authorized = claim.targetId === identity.userId &&
+        await this.impl.users.get(this.impl.users.idFromString(claim.targetId))
+          .authorizePluginCapabilityForRuntimeHost(claim);
+    } else {
+      const adminSettings = this.ctx.exports.AdminSettings.getByName("");
+      authorized = claim.targetId === adminSettings.id.toString() &&
+        await adminSettings.authorizePluginCapabilityForRuntimeHost(claim);
+    }
+    if (!authorized) {
+      this.impl.pluginRuntimeRealms.denyPlugin(
+        identity, pluginId, activationKey, manifestDigest,
+      );
+      throw new Error("Plugin runtime capability is no longer authorized.");
+    }
+    if (this.impl.pluginRuntimeRealms.activeCapabilityAuthority(
+      identity,
+      pluginId,
+      activationKey,
+      manifestDigest,
+      "workspace.metadata.read",
+    ) === undefined) {
+      throw new Error("Plugin runtime capability denied.");
+    }
+    return Object.freeze({
+      workspaceId: this.ctx.id.toString(),
+      title: this.impl.storage.title.get(),
+      role: identity.role,
+    });
+  }
+
+  /** Reads user-owned plugin state only after owner SSOT and exact active-token revalidation. */
+  async readPluginStateForRuntimeHost(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string,
+      key: string): Promise<unknown> {
+    const authority = this.impl.pluginRuntimeRealms.activeCapabilityAuthority(
+      identity,
+      pluginId,
+      activationKey,
+      manifestDigest,
+      "plugin.state.read",
+    );
+    if (authority === undefined) throw new Error("Plugin runtime capability denied.");
+    const installation = authority.installation;
+    if (
+      installation.scope !== "user" ||
+      installation.targetId !== identity.userId ||
+      installation.stateRef === undefined
+    ) {
+      this.impl.pluginRuntimeRealms.denyPlugin(
+        identity, pluginId, activationKey, manifestDigest,
+      );
+      throw new Error("Plugin runtime state capability is unavailable.");
+    }
+    const claim: PluginRuntimeCapabilityClaim = {
+      scope: "user",
+      targetId: installation.targetId,
+      installationId: installation.installationId,
+      pluginId: installation.pluginId,
+      manifestDigest: installation.manifestDigest,
+      capability: "plugin.state.read",
+      phase: "active",
+    };
+    const user = this.impl.users.get(this.impl.users.idFromString(identity.userId));
+    if (!await user.authorizePluginCapabilityForRuntimeHost(claim)) {
+      this.impl.pluginRuntimeRealms.denyPlugin(
+        identity, pluginId, activationKey, manifestDigest,
+      );
+      throw new Error("Plugin runtime capability is no longer authorized.");
+    }
+    const states = this.ctx.exports.PluginStateDurableObject;
+    const owner = {
+      scope: "user" as const,
+      targetId: installation.targetId,
+      pluginId: installation.pluginId,
+      installationId: installation.installationId,
+    };
+    const value = await states.get(states.idFromString(installation.stateRef)).read(owner, key);
+    if (
+      !await user.authorizePluginCapabilityForRuntimeHost(claim) ||
+      this.impl.pluginRuntimeRealms.activeCapabilityAuthority(
+        identity,
+        pluginId,
+        activationKey,
+        manifestDigest,
+        "plugin.state.read",
+      ) === undefined
+    ) {
+      this.impl.pluginRuntimeRealms.denyPlugin(
+        identity, pluginId, activationKey, manifestDigest,
+      );
+      throw new Error("Plugin runtime capability is no longer authorized.");
+    }
+    return value;
+  }
+
+  /** Asserts bounded host operational health without returning runtime authority material. */
+  assertPluginRuntimeActiveForHost(
+      userId: string,
+      role: CollaboratorRole,
+      pluginId: string): void {
+    this.impl.pluginRuntimeRealms.assertPluginActive({
+      overseerId: this.ctx.id.toString(),
+      userId,
+      role,
+    }, pluginId);
+  }
+
+  /** Exercises the production loopback for one active runtime without returning its claim. */
+  async assertPluginRuntimeLoopbackActiveForHost(
+      userId: string,
+      role: CollaboratorRole,
+      pluginId: string): Promise<void> {
+    const claim = this.impl.pluginRuntimeRealms.activeClaim({
+      overseerId: this.ctx.id.toString(),
+      userId,
+      role,
+    }, pluginId);
+    if (claim === undefined) throw new Error("Plugin runtime plugin is inactive.");
+    await this.ctx.exports.PluginRuntimeLoopback({props: {
+      ...claim,
+      pluginId,
+    }}).assertActive();
+  }
+
+  /** Invokes the real metadata facade without trusting or returning untrusted plugin output. */
+  async assertPluginWorkspaceMetadataCapabilityForHost(
+      userId: string,
+      role: CollaboratorRole,
+      pluginId: string): Promise<void> {
+    await this.impl.pluginRuntimeRealms.assertWorkspaceMetadataCapability({
+      overseerId: this.ctx.id.toString(),
+      userId,
+      role,
+    }, pluginId);
+  }
+
+  /** Immediately denies an exact policy-rejected claim and queues local forced reconciliation. */
+  revokeDeniedPluginRuntimeForHost(
+      identity: PluginRuntimeRealmIdentity,
+      pluginId: string,
+      activationKey: string,
+      manifestDigest: string): void {
+    this.impl.pluginRuntimeRealms.denyPlugin(
+      identity, pluginId, activationKey, manifestDigest,
+    );
+  }
+
   // `notifyClosed` should be invoked when the return `Overseer` stub is disposed, which is used
   // by AuthenticatedApiImpl.#openGadgetInternal() to detect Durable Object disconnects.
   async open(userId: string, profileId: string,
@@ -6563,15 +7041,22 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
       })();
     }
 
+    const pluginRuntimeSession = await this.impl.pluginRuntimeRealms.acquire({
+      overseerId: this.impl.ctx.id.toString(),
+      userId,
+      role,
+    });
+
     if (role === "use") {
       // "use" collaborators get a restricted capability exposing only the gadget UI.
       return new UseOverseerInterface(
-          this.impl, owner, clientUser, profileId, userId, notifyClosed.dup());
+          this.impl, owner, clientUser, profileId, userId, notifyClosed.dup(),
+          pluginRuntimeSession);
     }
 
     return new OverseerClientInterface(
         this.impl, owner, clientUser, profileId, userId, isOwner, notifyClosed.dup(),
-        ensureCapsules);
+        ensureCapsules, pluginRuntimeSession);
   }
 
   // Called only through AuthenticatedApiImpl. Keeping the draft definition off the returned
@@ -7223,12 +7708,13 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
               private owner: DurableObjectStub<UserDurableObject>,
               private clientUser: DurableObjectStub<UserDurableObject>,
               private clientProfileId: string,
-              clientUserId: string,
+              private clientUserId: string,
               private isOwner: boolean,
               private notifyClosed: NativeRpcStub<() => void>,
               // Ambient capsule reconciliation started during open(); listSlashCommands() waits for
               // this so ambient providers are attached when possible.
-               private slashCommandsReady: Promise<void>) {
+              private slashCommandsReady: Promise<void>,
+              private pluginRuntimeSession: PluginRuntimeRealmSession) {
     super();
     this.#leavePresence = joinSessionPresence(
         this.impl, this.clientProfileId, "build", () => this.#getClientProfile());
@@ -7239,6 +7725,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   #leaveOutputsFanout: () => void;
 
   [Symbol.dispose]() {
+    this.pluginRuntimeSession.release();
     this.#leavePresence();
     this.#leaveOutputsFanout();
     this.notifyClosed();
@@ -7274,6 +7761,343 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     if (!this.isOwner) {
       result.owner = await this.owner.whoami();
     }
+    return result;
+  }
+
+  async getPluginRuntimeStatus(): Promise<PluginRuntimeStatusView> {
+    return this.pluginRuntimeSession.getStatus();
+  }
+
+  async installWorkspacePlugin(
+      request: InstallPluginRequest): Promise<InstallWorkspacePluginResult> {
+    const resolver = createPluginStoreManifestCatalog(
+      this.impl.ctx.exports.PluginStoreDurableObject.getByName(""),
+    );
+    const resolved = await resolveApprovedPluginManifest(resolver, request);
+    if (!resolved.ok) return resolved;
+    const manifest = resolved.manifest;
+    if (isUserOnlyPluginManifest(manifest)) {
+      return {ok: false, error: "PLUGIN_SCOPE_NOT_SUPPORTED"};
+    }
+    let result: InstallWorkspacePluginResult = {
+      ok: false,
+      error: "CAPABILITY_OWNER_APPROVAL_REQUIRED",
+    };
+
+    this.impl.ctx.storage.transactionSync(() => {
+      const existing = this.impl.storage.workspacePluginInstallations.get(manifest.pluginId);
+      if (
+        existing !== undefined &&
+        this.impl.storage.workspacePluginRevocations.get(existing.installationId) !== undefined
+      ) {
+        result = {ok: false, error: "UNINSTALL_IN_PROGRESS"};
+        return;
+      }
+      const approvedCapabilities = this.isOwner
+        ? [...manifest.requestedCapabilities]
+        : [...(existing?.approvedCapabilities ?? [])];
+      const approved = new Set(approvedCapabilities);
+      if (
+        !this.isOwner &&
+        !manifest.requestedCapabilities.every(capability => approved.has(capability))
+      ) {
+        return;
+      }
+
+      const targetId = this.impl.ctx.id.toString();
+      const installationId = existing?.installationId ?? crypto.randomUUID();
+      const stateRef = existing?.stateRef ?? (
+        manifest.state?.kind === "installation" ||
+        manifest.requestedCapabilities.includes("plugin.state.read")
+          ? this.impl.ctx.exports.PluginStateDurableObject.getByName(JSON.stringify([
+            "plugin-state-v1",
+            "workspace",
+            targetId,
+            manifest.pluginId,
+            installationId,
+          ])).id.toString()
+          : undefined
+      );
+      const installation: WorkspacePluginInstallationRecord = {
+        schemaVersion: 1,
+        installationId,
+        scope: "workspace",
+        targetId,
+        pluginId: manifest.pluginId,
+        packageVersion: manifest.packageVersion,
+        manifestDigest: manifest.manifestDigest,
+        enabled: true,
+        approvedCapabilities,
+        grantedCapabilities: [...manifest.requestedCapabilities],
+        config: existing?.config ?? null,
+        ...(stateRef === undefined ? {} : {stateRef}),
+      };
+      const sequence = this.impl.storage.nextWorkspacePluginAuditSequence.get();
+      const event: WorkspacePluginAuditEvent = {
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_DESIRED_STATE_PUT",
+        actorUserId: this.clientUserId,
+        actorProfileId: this.clientProfileId,
+        authority: this.isOwner ? "owner" : "build",
+        scope: "workspace",
+        targetId,
+        installationId: installation.installationId,
+        pluginId: installation.pluginId,
+        packageVersion: installation.packageVersion,
+        manifestDigest: installation.manifestDigest,
+        approvedCapabilities: [...installation.approvedCapabilities],
+        grantedCapabilities: [...installation.grantedCapabilities],
+        recordedAt: Date.now(),
+      };
+      this.impl.storage.workspacePluginInstallations.put(installation);
+      this.impl.storage.workspacePluginAuditEvents.put(event);
+      this.impl.storage.nextWorkspacePluginAuditSequence.put(sequence + 1);
+      result = {ok: true, installationId: installation.installationId};
+    });
+    return result;
+  }
+
+  async uninstallWorkspacePlugin(
+      request: UninstallWorkspacePluginRequest): Promise<UninstallWorkspacePluginResult> {
+    const begun = this.#beginWorkspacePluginUninstall(
+      request.pluginId,
+      request.expectedInstallationId,
+    );
+    if (!begun.ok) return begun;
+    return this.#finalizeWorkspacePluginUninstall(begun.installationId);
+  }
+
+  #beginWorkspacePluginUninstall(
+      pluginId: string,
+      expectedInstallationId: string): BeginWorkspacePluginUninstallResult {
+    let result: BeginWorkspacePluginUninstallResult = {
+      ok: false,
+      error: "PLUGIN_NOT_INSTALLED",
+    };
+    this.impl.ctx.storage.transactionSync(() => {
+      const exact = this.impl.storage.workspacePluginRevocations.get(expectedInstallationId);
+      if (exact?.pluginId === pluginId) {
+        result = {ok: true, installationId: expectedInstallationId};
+        return;
+      }
+      const installation = this.impl.storage.workspacePluginInstallations.get(pluginId);
+      if (installation === undefined) return;
+      if (installation.installationId !== expectedInstallationId) {
+        result = {ok: false, error: "INSTALLATION_CHANGED"};
+        return;
+      }
+      this.impl.storage.workspacePluginRevocations.put({
+        schemaVersion: 1,
+        installationId: installation.installationId,
+        pluginId: installation.pluginId,
+        ...(installation.stateRef === undefined ? {} : {stateRef: installation.stateRef}),
+        startedAt: Date.now(),
+      });
+      result = {ok: true, installationId: installation.installationId};
+    });
+    return result;
+  }
+
+  #finalizeWorkspacePluginUninstall(
+      installationId: string): FinalizeWorkspacePluginUninstallResult {
+    let result: FinalizeWorkspacePluginUninstallResult = {
+      ok: false,
+      error: "PLUGIN_NOT_INSTALLED",
+    };
+    this.impl.ctx.storage.transactionSync(() => {
+      const revocation = this.impl.storage.workspacePluginRevocations.get(installationId);
+      if (revocation === undefined) return;
+      if (revocation.finalizedAt !== undefined) {
+        result = {
+          ok: true,
+          installationId,
+          retainedState: this.impl.storage.detachedWorkspacePluginStates.get(installationId) !==
+            undefined,
+        };
+        return;
+      }
+      const installation = this.impl.storage.workspacePluginInstallations.get(
+        revocation.pluginId,
+      );
+      if (installation?.installationId !== installationId) {
+        result = {ok: false, error: "UNINSTALL_IN_PROGRESS"};
+        return;
+      }
+      const detachedAt = Date.now();
+      if (installation.stateRef !== undefined) {
+        this.impl.storage.detachedWorkspacePluginStates.put({
+          schemaVersion: 1,
+          installationId,
+          pluginId: installation.pluginId,
+          packageVersion: installation.packageVersion,
+          manifestDigest: installation.manifestDigest,
+          stateRef: installation.stateRef,
+          detachedAt,
+        });
+      }
+      const sequence = this.impl.storage.nextWorkspacePluginAuditSequence.get();
+      this.impl.storage.workspacePluginAuditEvents.put({
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_UNINSTALLED",
+        actorUserId: this.clientUserId,
+        actorProfileId: this.clientProfileId,
+        authority: this.isOwner ? "owner" : "build",
+        scope: "workspace",
+        targetId: this.impl.ctx.id.toString(),
+        installationId,
+        pluginId: installation.pluginId,
+        packageVersion: installation.packageVersion,
+        manifestDigest: installation.manifestDigest,
+        approvedCapabilities: [],
+        grantedCapabilities: [],
+        recordedAt: detachedAt,
+      });
+      this.impl.storage.workspacePluginInstallations.delete(installation.pluginId);
+      this.impl.storage.workspacePluginRevocations.put({...revocation, finalizedAt: detachedAt});
+      this.impl.storage.nextWorkspacePluginAuditSequence.put(sequence + 1);
+      result = {
+        ok: true,
+        installationId,
+        retainedState: installation.stateRef !== undefined,
+      };
+    });
+    return result;
+  }
+
+  async listDetachedWorkspacePluginStates(): Promise<DetachedWorkspacePluginStateSummary[]> {
+    return Array.from(
+      this.impl.storage.detachedWorkspacePluginStates.list(),
+      record => ({
+        installationId: record.installationId,
+        pluginId: record.pluginId,
+        packageVersion: record.packageVersion,
+        detachedAt: record.detachedAt,
+      }),
+    );
+  }
+
+  async purgeWorkspacePluginState(
+      request: PurgeWorkspacePluginStateRequest): Promise<PurgeWorkspacePluginStateResult> {
+    if (!this.isOwner) {
+      throw new Error("Unauthorized: only the workspace owner may purge plugin state.");
+    }
+    const begun = this.#beginWorkspacePluginStatePurge(request.installationId);
+    if (!begun.ok) return begun;
+    if (begun.phase === "FINALIZED") {
+      return {ok: true, installationId: begun.installationId};
+    }
+    const states = this.impl.ctx.exports.PluginStateDurableObject;
+    await states.get(states.idFromString(begun.stateRef)).purge(begun.owner);
+    return this.#finalizeWorkspacePluginStatePurge(begun.installationId);
+  }
+
+  #beginWorkspacePluginStatePurge(
+      installationId: string): BeginWorkspacePluginStatePurgeResult {
+    let result: BeginWorkspacePluginStatePurgeResult = {
+      ok: false,
+      error: "DETACHED_PLUGIN_STATE_NOT_FOUND",
+    };
+    this.impl.ctx.storage.transactionSync(() => {
+      const exact = this.impl.storage.workspacePluginStatePurges.get(installationId);
+      if (exact !== undefined) {
+        if (exact.phase === "FINALIZED") {
+          result = {ok: true, phase: "FINALIZED", installationId};
+          return;
+        }
+        result = {
+          ok: true,
+          phase: "PURGE_REQUIRED",
+          installationId,
+          stateRef: exact.stateRef,
+          owner: {
+            scope: "workspace",
+            targetId: this.impl.ctx.id.toString(),
+            pluginId: exact.pluginId,
+            installationId,
+          },
+        };
+        return;
+      }
+      const detached = this.impl.storage.detachedWorkspacePluginStates.get(installationId);
+      if (detached === undefined) return;
+      this.impl.storage.workspacePluginStatePurges.put({
+        schemaVersion: 1,
+        phase: "PENDING",
+        installationId,
+        pluginId: detached.pluginId,
+        packageVersion: detached.packageVersion,
+        manifestDigest: detached.manifestDigest,
+        stateRef: detached.stateRef,
+        startedAt: Date.now(),
+      });
+      result = {
+        ok: true,
+        phase: "PURGE_REQUIRED",
+        installationId,
+        stateRef: detached.stateRef,
+        owner: {
+          scope: "workspace",
+          targetId: this.impl.ctx.id.toString(),
+          pluginId: detached.pluginId,
+          installationId,
+        },
+      };
+    });
+    return result;
+  }
+
+  #finalizeWorkspacePluginStatePurge(
+      installationId: string): FinalizeWorkspacePluginStatePurgeResult {
+    let result: FinalizeWorkspacePluginStatePurgeResult = {
+      ok: false,
+      error: "DETACHED_PLUGIN_STATE_NOT_FOUND",
+    };
+    this.impl.ctx.storage.transactionSync(() => {
+      const purge = this.impl.storage.workspacePluginStatePurges.get(installationId);
+      if (purge === undefined) return;
+      if (purge.phase === "FINALIZED") {
+        result = {ok: true, installationId};
+        return;
+      }
+      const detached = this.impl.storage.detachedWorkspacePluginStates.get(installationId);
+      if (
+        detached === undefined || detached.pluginId !== purge.pluginId ||
+        detached.stateRef !== purge.stateRef
+      ) return;
+      const purgedAt = Date.now();
+      const sequence = this.impl.storage.nextWorkspacePluginAuditSequence.get();
+      this.impl.storage.workspacePluginAuditEvents.put({
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_STATE_PURGED",
+        actorUserId: this.clientUserId,
+        actorProfileId: this.clientProfileId,
+        authority: "owner",
+        scope: "workspace",
+        targetId: this.impl.ctx.id.toString(),
+        installationId,
+        pluginId: detached.pluginId,
+        packageVersion: detached.packageVersion,
+        manifestDigest: detached.manifestDigest,
+        approvedCapabilities: [],
+        grantedCapabilities: [],
+        recordedAt: purgedAt,
+      });
+      this.impl.storage.detachedWorkspacePluginStates.delete(installationId);
+      this.impl.storage.workspacePluginStatePurges.put({
+        schemaVersion: 1,
+        phase: "FINALIZED",
+        installationId,
+        pluginId: purge.pluginId,
+        packageVersion: purge.packageVersion,
+        manifestDigest: purge.manifestDigest,
+        purgedAt,
+      });
+      this.impl.storage.nextWorkspacePluginAuditSequence.put(sequence + 1);
+      result = {ok: true, installationId};
+    });
     return result;
   }
 
@@ -8881,7 +9705,8 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
               private clientUser: DurableObjectStub<UserDurableObject>,
               private clientProfileId: string,
               clientUserId: string,
-              private notifyClosed: NativeRpcStub<() => void>) {
+              private notifyClosed: NativeRpcStub<() => void>,
+              private pluginRuntimeSession: PluginRuntimeRealmSession) {
     super();
     this.#leavePresence = joinSessionPresence(
         this.impl, this.clientProfileId, "use", () => this.clientUser.whoami());
@@ -8892,6 +9717,7 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
   #leaveOutputsFanout: () => void;
 
   [Symbol.dispose]() {
+    this.pluginRuntimeSession.release();
     this.#leavePresence();
     this.#leaveOutputsFanout();
     this.notifyClosed();
@@ -8913,6 +9739,29 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
       role: "use",
       defaultGadgetId: this.impl.defaultGadgetId,
     };
+  }
+
+  async getPluginRuntimeStatus(): Promise<PluginRuntimeStatusView> {
+    return this.pluginRuntimeSession.getStatus();
+  }
+
+  async installWorkspacePlugin(
+      _request: InstallPluginRequest): Promise<InstallWorkspacePluginResult> {
+    this.#deny();
+  }
+
+  async uninstallWorkspacePlugin(
+      _request: UninstallWorkspacePluginRequest): Promise<UninstallWorkspacePluginResult> {
+    this.#deny();
+  }
+
+  async listDetachedWorkspacePluginStates(): Promise<DetachedWorkspacePluginStateSummary[]> {
+    this.#deny();
+  }
+
+  async purgeWorkspacePluginState(
+      _request: PurgeWorkspacePluginStateRequest): Promise<PurgeWorkspacePluginStateResult> {
+    this.#deny();
   }
 
   async subscribeToMetadata(

@@ -16,6 +16,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "jsonc-parser";
 import { getWranglerPortFromBackendHost } from "./scripts/dev-server-config.js";
+import { generateWorkshopBackendArtifacts } from "./scripts/dev-server-artifacts.js";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PACKAGES_DIR = join(ROOT, "packages");
@@ -45,13 +46,9 @@ loadDevVars();
 
 const useWorkersAi = process.argv.includes("--use-workers-ai-binding");
 
-// Generate the format blueprint module before Wrangler tries to bundle the backend. The output is
-// gitignored, so it will not exist on a clean checkout.
-execFileSync(
-  process.execPath,
-  [join(WORKSHOP_BACKEND_DIR, "scripts", "build-format-blueprints.mjs")],
-  { stdio: "inherit", cwd: WORKSHOP_BACKEND_DIR },
-);
+// Generate gitignored backend modules before Wrangler tries to bundle a clean checkout. This also
+// replaces any integration-test manifest fixture with the deployment's default local registry.
+generateWorkshopBackendArtifacts(WORKSHOP_BACKEND_DIR);
 
 // In `run-local` mode the backend serves the pre-built frontend bundle as static assets (there is no
 // Vite dev server). In normal dev mode we leave assets unconfigured so the frontend is served by
@@ -303,6 +300,11 @@ const configs = [
 ];
 
 const args = configs.flatMap(c => ["-c", c]);
+// Recording and other isolated local runs can opt into a separate Wrangler state root without
+// deleting or mutating the developer's normal .wrangler state.
+if (process.env.WRANGLER_PERSIST_TO) {
+  args.push("--persist-to", process.env.WRANGLER_PERSIST_TO);
+}
 const backendHost = process.env.VITE_BACKEND_HOST;
 if (backendHost) {
   let wranglerPort;

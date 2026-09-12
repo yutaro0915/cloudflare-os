@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 3,
+  "pluginId": "test.runtime-metadata",
+  "packageVersion": "2.0.0",
+  "requestedCapabilities": [],
+  "dependencies": [],
+  "runtime": {
+    "kind": "dynamic-worker",
+    "codeArtifactDigest": "sha256:8e43452acaa6dbad328a79bfb64eb301ddc997eb583bc443a8598b3ec128ee0f"
+  }
+}

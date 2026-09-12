@@ -29,6 +29,7 @@ allowBuilds:
   '@google/genai': true
   core-js-pure: true
   esbuild: true
+  ffmpeg-static: true
   protobufjs: true
   sharp: true
   workerd: true

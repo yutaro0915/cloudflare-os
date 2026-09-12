@@ -1,6 +1,6 @@
 # Gadgets Workshop Frontend
 
-Single-page app for the Gadgets Workshop UI. Built with React, Kumo, and Vite.
+Single-page app for the Gadgets Workshop UI. Built with React, Kumo, Design Token Kit, and Vite.
 
 ## Development
 
@@ -9,6 +9,21 @@ pnpm dev        # start dev server on http://localhost:3000
 pnpm build      # type-check and build for production
 pnpm preview    # preview production build locally
 ```
+
+## Design tokens
+
+`src/design-tokens.json` is the light-theme DTCG 2025.10 source of truth and contains the
+primitive, semantic, and component layers. `src/design-tokens.dark.json` contains only dark-theme
+primitive overrides. Kumo aliases in `src/styles.css` consume the generated semantic variables;
+Plugin Store-specific styles consume the component layer.
+
+```sh
+pnpm tokens:check  # schema, reference, and three-layer architecture checks
+pnpm tokens:build  # validate and regenerate the ignored CSS artifact
+```
+
+The normal development, asset, production, and type-check commands run the relevant token check or
+generation step automatically. Do not edit `src/design-tokens.generated.css` directly.
 
 ## Authentication modes
 

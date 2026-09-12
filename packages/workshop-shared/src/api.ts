@@ -285,10 +285,666 @@ function isOpenGadgetErrorCode(value: unknown): value is OpenGadgetErrorCode {
       value === OPEN_GADGET_ERROR_CODES.workspaceAccessDenied;
 }
 
+/** Foreground approval for installing one exact plugin version into an authorized scope. */
+export interface InstallPluginRequest {
+  /** Stable package identifier to resolve. */
+  pluginId: string;
+
+  /** Exact package version to resolve without range selection. */
+  packageVersion: string;
+
+  /** Manifest capabilities the authenticated user approves individually. */
+  approvedCapabilities: string[];
+}
+
+/** Result of resolving and persisting one plugin installation. */
+export type InstallPluginResult = {
+  /** The verified desired state and its audit event were persisted. */
+  ok: true;
+
+  /** Host-issued identifier for this installation lifecycle. */
+  installationId: string;
+} | {
+  /** The request was rejected without changing desired state. */
+  ok: false;
+
+  /** Stable reason the authenticated user can correct. */
+  error: "PLUGIN_VERSION_NOT_FOUND" | "CAPABILITY_APPROVAL_MISMATCH" |
+    "PLUGIN_SCOPE_NOT_SUPPORTED" | "UNINSTALL_IN_PROGRESS";
+};
+
+/** User-scoped install request accepted by `AuthenticatedApi.installUserPlugin()`. */
+export type InstallUserPluginRequest = InstallPluginRequest;
+
+/** User-scoped install result returned by `AuthenticatedApi.installUserPlugin()`. */
+export type InstallUserPluginResult = InstallPluginResult;
+
+/** Host-owned template used to create a bounded, reviewable user plugin package. */
+export type UserPluginAuthoringTemplate = "focus-brief" | "personal-board";
+
+/** Host verification recorded before a candidate can be reviewed for publication. */
+export type UserPluginCandidateVerificationCheck =
+  "manifest-schema-verified" |
+  "artifact-digests-verified" |
+  "dynamic-worker-isolation-passed" |
+  "candidate-signature-verified";
+
+/** Safe exact-package projection shown during the separate admin publication review. */
+export interface UserPluginCandidateReview {
+  /** Host template that produced the executable package. */
+  template: UserPluginAuthoringTemplate;
+
+  /** Presentation title copied into the verified manifest. */
+  title: string;
+
+  /** Surface heading copied into the verified UI artifact. */
+  surfaceTitle: string;
+
+  /** Capabilities an importing user must approve exactly. */
+  requestedCapabilities: string[];
+
+  /** Whether this package owns installation-scoped state. */
+  state: "none" | "installation";
+
+  /** Closed renderer contract exercised by the isolation test. */
+  renderer: "worker-rendered-document-v1" | "worker-interactive-document-v1";
+
+  /** Content addresses of every executable artifact in the immutable candidate. */
+  artifactDigests: string[];
+
+  /** Checks that passed before the Store accepted the unpublished candidate. */
+  verificationChecks: UserPluginCandidateVerificationCheck[];
+}
+
+/** Bounded human input accepted by the trusted plugin authoring gateway. */
+export interface StageUserPluginCandidateRequest {
+  /** Host-owned implementation template; arbitrary executable source is never accepted. */
+  template: UserPluginAuthoringTemplate;
+
+  /** New package identifier in the community namespace. */
+  pluginId: string;
+
+  /** Exact semantic package version. */
+  packageVersion: string;
+
+  /** Trusted-host presentation title. */
+  title: string;
+
+  /** Trusted-host presentation summary. */
+  summary: string;
+
+  /** Template-specific heading rendered as literal text. */
+  surfaceTitle: string;
+
+  /** Bounded literal items used by the selected template. */
+  items: string[];
+}
+
+/** Result of isolation-testing, signing, and staging one human-authored candidate. */
+export type StageUserPluginCandidateResult = {
+  /** Candidate is immutable and remains invisible until an admin publishes it. */
+  ok: true;
+
+  /** Stable content address passed to the separate admin approval capability. */
+  candidateId: string;
+
+  /** Canonical manifest digest recomputed by the host. */
+  manifestDigest: string;
+
+  /** Exact package identity staged for review. */
+  pluginId: string;
+  packageVersion: string;
+
+  /** Exact generated-package facts that the admin must inspect before publication. */
+  review: UserPluginCandidateReview;
+} | {
+  /** No installable Store package was created. */
+  ok: false;
+
+  /** Stable expected failure safe for the authoring UI. */
+  error: "ADMIN_REQUIRED" | "INVALID_INPUT" | "ISOLATION_TEST_FAILED" |
+    "CANDIDATE_REJECTED";
+};
+
+/** User-scoped uninstall request accepted without any caller-supplied owner identity. */
+export interface UninstallUserPluginRequest {
+  /** Stable package identifier currently installed for the authenticated user. */
+  pluginId: string;
+
+  /** Exact installation lifecycle observed by the user before requesting uninstall. */
+  expectedInstallationId: string;
+}
+
+/** Result of revoking and detaching one user-scoped installation lifecycle. */
+export type UninstallUserPluginResult = {
+  /** The lifecycle was revoked and removed from desired state. */
+  ok: true;
+
+  /** Host-issued lifecycle identifier that was revoked. */
+  installationId: string;
+
+  /** Whether plugin-owned state was retained as a detached record. */
+  retainedState: boolean;
+} | {
+  /** No mutation was applied. */
+  ok: false;
+
+  /** Stable expected failure visible to the authenticated user. */
+  error: "PLUGIN_NOT_INSTALLED" | "INSTALLATION_CHANGED" | "UNINSTALL_IN_PROGRESS";
+};
+
+/** Safe browser summary of detached plugin state; the opaque state reference is never exposed. */
+export interface DetachedUserPluginStateSummary {
+  /** Revoked installation lifecycle that owns the retained state. */
+  installationId: string;
+
+  /** Stable package identifier of the detached installation. */
+  pluginId: string;
+
+  /** Exact package version recorded when detach completed. */
+  packageVersion: string;
+
+  /** Host timestamp in milliseconds since the Unix epoch. */
+  detachedAt: number;
+}
+
+/** User-scoped purge request accepted without a caller-supplied state reference. */
+export interface PurgeUserPluginStateRequest {
+  /** Exact detached installation lifecycle observed by the authenticated user. */
+  installationId: string;
+}
+
+/** Result of permanently purging one detached user plugin state lifecycle. */
+export type PurgeUserPluginStateResult = {
+  /** The exact detached lifecycle is permanently purged. */
+  ok: true;
+
+  /** Host-issued lifecycle identifier that was purged. */
+  installationId: string;
+} | {
+  /** No purge mutation was applied. */
+  ok: false;
+
+  /** Stable expected failure visible to the authenticated user. */
+  error: "DETACHED_PLUGIN_STATE_NOT_FOUND";
+};
+
+/** Workspace-scoped uninstall request using an observed lifecycle identifier. */
+export type UninstallWorkspacePluginRequest = UninstallUserPluginRequest;
+
+/** Result of revoking and detaching one workspace installation lifecycle. */
+export type UninstallWorkspacePluginResult = UninstallUserPluginResult;
+
+/** Safe summary of detached workspace plugin state. */
+export type DetachedWorkspacePluginStateSummary = DetachedUserPluginStateSummary;
+
+/** Workspace-scoped purge request using an observed detached lifecycle identifier. */
+export type PurgeWorkspacePluginStateRequest = PurgeUserPluginStateRequest;
+
+/** Result of permanently purging one detached workspace state lifecycle. */
+export type PurgeWorkspacePluginStateResult = PurgeUserPluginStateResult;
+
+/** Deployment-scoped uninstall request using an observed lifecycle identifier. */
+export type UninstallDeploymentPluginRequest = UninstallUserPluginRequest;
+
+/** Result of revoking and detaching one deployment installation lifecycle. */
+export type UninstallDeploymentPluginResult = UninstallUserPluginResult;
+
+/** Safe summary of detached deployment plugin state. */
+export type DetachedDeploymentPluginStateSummary = DetachedUserPluginStateSummary;
+
+/** Deployment-scoped purge request using an observed detached lifecycle identifier. */
+export type PurgeDeploymentPluginStateRequest = PurgeUserPluginStateRequest;
+
+/** Result of permanently purging one detached deployment state lifecycle. */
+export type PurgeDeploymentPluginStateResult = PurgeUserPluginStateResult;
+
+/** Plain text block rendered by the trusted host. */
+export interface UserPluginDeclarativeTextBlock {
+  /** Closed renderer discriminator. */
+  kind: "text";
+
+  /** Literal text rendered without HTML interpretation. */
+  text: string;
+}
+
+/** Informational notice block rendered by the trusted host. */
+export interface UserPluginDeclarativeNoticeBlock {
+  /** Closed renderer discriminator. */
+  kind: "notice";
+
+  /** Host-selected visual tone. */
+  tone: "info" | "warning";
+
+  /** Literal notice text rendered without HTML interpretation. */
+  text: string;
+}
+
+/** Literal string list rendered by the trusted host. */
+export interface UserPluginDeclarativeListBlock {
+  /** Closed renderer discriminator. */
+  kind: "list";
+
+  /** Ordered literal items rendered without HTML interpretation. */
+  items: string[];
+}
+
+/** Closed host-rendered document exposed by one verified declarative UI contribution. */
+export interface UserPluginDeclarativeDocument {
+  /** Schema version understood by the trusted frontend renderer. */
+  schemaVersion: 1;
+
+  /** Ordered blocks rendered as text-only host components. */
+  blocks: (
+    UserPluginDeclarativeTextBlock |
+    UserPluginDeclarativeNoticeBlock |
+    UserPluginDeclarativeListBlock
+  )[];
+}
+
+/** Safe browser projection of one digest-bound UI contribution. */
+export type UserPluginUiContribution = {
+  /** Stable contribution identifier within one manifest. */
+  contributionId: string;
+
+  /** Initial fixed host placement. */
+  slot: "user-plugin.details";
+
+  /** Human-readable contribution title. */
+  title: string;
+
+  /** Trusted host renderer family. */
+  kind: "declarative";
+
+  /** Closed display document containing no executable content. */
+  document: UserPluginDeclarativeDocument;
+} | {
+  /** Stable contribution identifier within one manifest. */
+  contributionId: string;
+
+  /** Initial fixed host placement. */
+  slot: "user-plugin.details";
+
+  /** Human-readable contribution title. */
+  title: string;
+
+  /** Resource-limited worker renderer projected into an inert frame. */
+  kind: "worker-rendered";
+
+  /** Host-clamped frame height in CSS pixels. */
+  height: number;
+};
+
+/** One exact version offered by the immutable plugin catalog. */
+export interface UserPluginVersionOffer {
+  /** Exact package version accepted by install. */
+  packageVersion: string;
+
+  /** Human-readable package title from the verified manifest. */
+  title: string;
+
+  /** Short package summary from the verified manifest. */
+  summary: string;
+
+  /** Capabilities the user must approve exactly. */
+  requestedCapabilities: string[];
+
+  /** Plugin identifiers that must already be active. */
+  dependencies: string[];
+
+  /** Whether an installed lifecycle owns state that will be retained on uninstall. */
+  hasState: boolean;
+
+  /** Safe contribution metadata; sandbox code addresses are omitted. */
+  contributions: UserPluginUiContribution[];
+}
+
+/** Safe current user installation projection for Plugin Center. */
+export interface UserPluginInstallationSummary {
+  /** Host-issued lifecycle identifier used for uninstall CAS. */
+  installationId: string;
+
+  /** Exact installed package version. */
+  packageVersion: string;
+
+  /** Desired enabled state. */
+  enabled: boolean;
+
+  /** Capabilities currently granted by the owner. */
+  grantedCapabilities: string[];
+
+  /** Whether this lifecycle owns optional retained state. */
+  hasState: boolean;
+
+  /** Crash-resumable lifecycle phase derived from the owner SSOT. */
+  lifecycle: "installed" | "uninstalling";
+
+  /** Whether the exact persisted manifest is still in the catalog. */
+  catalogAvailability: "available" | "manifest-missing" | "manifest-mismatch";
+
+  /** Contributions only from the exact digest-matched manifest. */
+  contributions: UserPluginUiContribution[];
+}
+
+/** Plugin Center card joining immutable offers with optional current desired state. */
+export interface UserPluginCenterEntry {
+  /** Stable package identifier. */
+  pluginId: string;
+
+  /** Display title selected deterministically from current or offered manifest metadata. */
+  title: string;
+
+  /** Display summary selected with the same deterministic rule as the title. */
+  summary: string;
+
+  /** Exact catalog offers sorted by package version. */
+  offers: UserPluginVersionOffer[];
+
+  /** Current user lifecycle, or null when this package is not installed. */
+  installation: UserPluginInstallationSummary | null;
+}
+
+/** Detached state row rendered by Plugin Center without its opaque state reference. */
+export interface UserPluginDetachedStateCard extends DetachedUserPluginStateSummary {
+  /** Display title resolved from the exact historical manifest or plugin ID fallback. */
+  title: string;
+
+  /** Crash-resumable purge phase derived from the owner SSOT. */
+  lifecycle: "detached" | "purging";
+}
+
+/** Complete deterministic read model for the authenticated user's Plugin Center. */
+export interface UserPluginCenterView {
+  /** Catalog and current-install cards sorted by plugin ID. */
+  plugins: UserPluginCenterEntry[];
+
+  /** Retained state sorted newest-first without state references. */
+  detachedStates: UserPluginDetachedStateCard[];
+}
+
+/** Exact current worker-rendered contribution requested from Plugin Center. */
+export interface OpenUserPluginUiFrameRequest {
+  /** Stable package identifier of the current user installation. */
+  pluginId: string;
+
+  /** Exact current lifecycle observed in the Plugin Center snapshot. */
+  expectedInstallationId: string;
+
+  /** Manifest-owned sandbox contribution identifier. */
+  contributionId: string;
+}
+
+/** Display-only opaque-origin frame returned after owner and artifact revalidation. */
+export interface UserPluginUiFrame {
+  /** Human-readable frame title from the verified manifest. */
+  title: string;
+
+  /** Host-authored, script-free HTML projected from a twice-validated closed document. */
+  iframeHtml: string;
+
+  /** Host-validated frame height in CSS pixels. */
+  height: number;
+
+}
+
+/** Result of opening one exact installed sandbox contribution. */
+export type OpenUserPluginUiFrameResult = {
+  /** The contribution remains current and its artifact was verified. */
+  ok: true;
+
+  /** Display-only iframe definition containing no RPC authority. */
+  frame: UserPluginUiFrame;
+} | {
+  /** No frame or capability was created. */
+  ok: false;
+
+  /** Collapsed expected failure that does not reveal internal policy or artifact state. */
+  error: "PLUGIN_UI_NOT_AVAILABLE" | "PLUGIN_UI_BUSY" | "PLUGIN_UI_RATE_LIMITED";
+};
+
+/** Safe navigation entry derived from one exact current user installation. */
+export interface UserPluginNavigationEntry {
+  /** Stable package identifier used only as a route locator. */
+  pluginId: string;
+
+  /** Exact installation lifecycle used for compare-and-set authorization. */
+  installationId: string;
+
+  /** Exact package version whose closed interaction contract is rendered. */
+  packageVersion: string;
+
+  /** Stable contribution identifier selected by the verified manifest. */
+  contributionId: string;
+
+  /** Human-readable sidebar and page title. */
+  title: string;
+}
+
+/** Closed action button rendered by the trusted interactive plugin host. */
+export interface UserPluginInteractiveAction {
+  /** Opaque bounded action identifier interpreted only by the isolated reducer. */
+  actionId: string;
+
+  /** Literal button label. */
+  label: string;
+
+  /** Host-selected visual treatment without custom style authority. */
+  tone: "neutral" | "danger";
+}
+
+/** One item in a host-rendered interactive column. */
+export interface UserPluginInteractiveItem {
+  /** Stable item identity used only for React reconciliation and accessible labeling. */
+  itemId: string;
+
+  /** Literal item title. */
+  title: string;
+
+  /** Ordered closed actions offered by the isolated reducer. */
+  actions: UserPluginInteractiveAction[];
+}
+
+/** One column in a host-rendered interactive document. */
+export interface UserPluginInteractiveColumn {
+  /** Stable column identity. */
+  columnId: string;
+
+  /** Literal column title. */
+  title: string;
+
+  /** Ordered bounded items. */
+  items: UserPluginInteractiveItem[];
+}
+
+/** Optional text form whose submitted value is passed to one opaque reducer action. */
+export interface UserPluginInteractiveForm {
+  /** Opaque bounded action identifier interpreted only by the isolated reducer. */
+  actionId: string;
+
+  /** Literal submit button label. */
+  label: string;
+
+  /** Literal text-field placeholder. */
+  placeholder: string;
+
+  /** Host-enforced maximum input length. */
+  maxLength: number;
+}
+
+/** Closed interactive document rendered by trusted React components only. */
+export interface UserPluginInteractiveDocument {
+  /** Schema version understood by the trusted host renderer. */
+  schemaVersion: 1;
+
+  /** Literal page heading. */
+  title: string;
+
+  /** Optional bounded foreground text action. */
+  form: UserPluginInteractiveForm | null;
+
+  /** Ordered columns containing literal items and closed action buttons. */
+  columns: UserPluginInteractiveColumn[];
+}
+
+/** Opens or mutates one exact current interactive contribution. */
+export interface InteractUserPluginSurfaceRequest {
+  /** Stable package identifier of the current user installation. */
+  pluginId: string;
+
+  /** Exact lifecycle observed from the navigation read model. */
+  expectedInstallationId: string;
+
+  /** Exact package version that defined this foreground interaction. */
+  expectedPackageVersion: string;
+
+  /** Exact manifest-owned navigation contribution. */
+  contributionId: string;
+
+  /** Read-only open or one foreground reducer action. */
+  interaction: {
+    /** Opens the current snapshot without writing state. */
+    kind: "open";
+  } | {
+    /** Runs one action and persists its next state with compare-and-set. */
+    kind: "action";
+
+    /** Revision rendered to the user before this action. */
+    expectedRevision: number;
+
+    /** Client-generated idempotency key scoped to this state cell. */
+    mutationId: string;
+
+    /** Opaque action identifier emitted by the current closed document. */
+    actionId: string;
+
+    /** Optional bounded text value supplied by the trusted host form. */
+    input: string | null;
+  };
+}
+
+/** Result of opening or mutating one user plugin interactive surface. */
+export type InteractUserPluginSurfaceResult = {
+  /** The exact lifecycle remains current and the document is safe to render. */
+  ok: true;
+
+  /** Current state revision used by the next foreground action. */
+  revision: number;
+
+  /** Closed host-rendered document containing no executable content. */
+  document: UserPluginInteractiveDocument;
+} | {
+  /** The contribution or lifecycle is unavailable without exposing internal policy. */
+  ok: false;
+
+  /** Stable expected failure. */
+  error: "PLUGIN_UI_NOT_AVAILABLE";
+} | {
+  /** The user's bounded execution concurrency or sliding-window frequency was exhausted. */
+  ok: false;
+
+  /** Stable retryable execution-control failure. */
+  error: "PLUGIN_UI_BUSY" | "PLUGIN_UI_RATE_LIMITED";
+} | {
+  /** A concurrent action committed first; no mutation was applied. */
+  ok: false;
+
+  /** Stable compare-and-set conflict. */
+  error: "PLUGIN_UI_CONFLICT";
+} | {
+  /** The next plugin-owned state would exceed its installation quota. */
+  ok: false;
+
+  /** Stable bounded-state failure. */
+  error: "PLUGIN_UI_STATE_QUOTA_EXCEEDED";
+};
+
+/** Workspace-scoped install result returned by `Overseer.installWorkspacePlugin()`. */
+export type InstallWorkspacePluginResult = InstallPluginResult | {
+  /** The build collaborator request was rejected without changing desired state. */
+  ok: false;
+
+  /** The manifest exceeds the capability ceiling most recently approved by the owner. */
+  error: "CAPABILITY_OWNER_APPROVAL_REQUIRED";
+};
+
+/** Stable runtime identity safe to expose without activation keys, leases, or state references. */
+export interface PluginRuntimeIdentityView {
+  installationId: string;
+  pluginId: string;
+  packageVersion: string;
+  manifestDigest: string;
+}
+
+/** One reconciled plugin state projected from the host-owned runtime realm. */
+export type PluginRuntimeStateView = {
+  pluginId: string;
+  status: "active";
+  active: PluginRuntimeIdentityView;
+} | {
+  pluginId: string;
+  status: "suspended";
+  candidate: PluginRuntimeIdentityView;
+  reason: "MISSING_DEPENDENCY" | "DEPENDENCY_UNAVAILABLE";
+  retainedActive?: PluginRuntimeIdentityView;
+} | {
+  pluginId: string;
+  status: "failed";
+  candidate?: PluginRuntimeIdentityView;
+  reason:
+    "ACTIVATION_FAILED" | "CYCLIC_DEPENDENCY" |
+    "DEACTIVATION_FAILED" | "DEACTIVATION_BLOCKED" |
+    "MANIFEST_NOT_FOUND" | "MANIFEST_INTEGRITY_MISMATCH" |
+    "RUNTIME_ARTIFACT_NOT_DECLARED" | "CAPABILITY_UNSUPPORTED" |
+    "MANIFEST_DENYLISTED" | "RUNTIME_AUTHORITY_REVOKED" |
+    "RUNTIME_INVOCATION_FAILED";
+  retainedActive?: PluginRuntimeIdentityView;
+};
+
+/** Current safe runtime projection for exactly one authenticated workspace-user-role realm. */
+export interface PluginRuntimeStatusView {
+  /** `conflict` preserves the previous active set; `refresh-failed` preserves the last snapshot. */
+  outcome: "ready" | "conflict" | "refresh-failed";
+  states: PluginRuntimeStateView[];
+  observedAt: number;
+}
+
 // Top-level API exposed to the user after they have authenticated.
 export interface AuthenticatedApi extends RpcTarget {
   // Get profile info for the user who is logged in.
   whoami(): Promise<AiChatAuthorInfo>;
+
+  /** Install one exact user-scoped plugin after manifest and approval verification. */
+  installUserPlugin(request: InstallUserPluginRequest): Promise<InstallUserPluginResult>;
+
+  /** Revokes one user lifecycle before removing its desired-state record. */
+  uninstallUserPlugin(request: UninstallUserPluginRequest): Promise<UninstallUserPluginResult>;
+
+  /** Lists retained detached state without exposing state references or Durable Object stubs. */
+  listDetachedUserPluginStates(): Promise<DetachedUserPluginStateSummary[]>;
+
+  /** Permanently purges one exact detached state lifecycle. */
+  purgeUserPluginState(request: PurgeUserPluginStateRequest): Promise<PurgeUserPluginStateResult>;
+
+  /** Reads the complete safe Plugin Center projection for the authenticated user. */
+  getUserPluginCenter(): Promise<UserPluginCenterView>;
+
+  /** Builds a bounded template package, verifies it in isolation, and stages it unpublished. */
+  stageUserPluginCandidate(
+    request: StageUserPluginCandidateRequest,
+  ): Promise<StageUserPluginCandidateResult>;
+
+  /** Opens one exact worker-rendered contribution as an inert display frame. */
+  openUserPluginUiFrame(
+    request: OpenUserPluginUiFrameRequest,
+  ): Promise<OpenUserPluginUiFrameResult>;
+
+  /** Lists current navigation contributions without exposing state or artifact references. */
+  listUserPluginNavigation(): Promise<UserPluginNavigationEntry[]>;
+
+  /** Opens or mutates one exact interactive contribution through a host-owned CAS boundary. */
+  interactUserPluginSurface(
+    request: InteractUserPluginSurfaceRequest,
+  ): Promise<InteractUserPluginSurfaceResult>;
 
   // Set the user's own display name, seen in chats, etc.
   setOwnDisplayName(name: string): Promise<void>;
@@ -856,6 +1512,49 @@ export interface AdminApi {
   // Read all admin-managed settings for the admin UI in one call.
   getSettings(): Promise<AdminSettingsView>;
 
+  /** Install one exact deployment-scoped plugin after manifest and approval verification. */
+  installDeploymentPlugin(request: InstallPluginRequest): Promise<InstallPluginResult>;
+
+  /** Revokes one deployment lifecycle before removing its desired-state record. */
+  uninstallDeploymentPlugin(
+    request: UninstallDeploymentPluginRequest,
+  ): Promise<UninstallDeploymentPluginResult>;
+
+  /** Lists retained deployment state without exposing opaque state references. */
+  listDetachedDeploymentPluginStates(): Promise<DetachedDeploymentPluginStateSummary[]>;
+
+  /** Permanently purges one exact detached deployment state lifecycle. */
+  purgeDeploymentPluginState(
+    request: PurgeDeploymentPluginStateRequest,
+  ): Promise<PurgeDeploymentPluginStateResult>;
+
+  /** Approves and atomically publishes one already-verified immutable Store candidate. */
+  approvePluginStoreCandidate(candidateId: string): Promise<{
+    /** The candidate is now published, or was already published idempotently. */
+    ok: true;
+
+    /** Stable content address of the published candidate envelope. */
+    candidateId: string;
+  } | {
+    /** Publication did not change Store visibility. */
+    ok: false;
+
+    /** Stable expected publication failure. */
+    error: "CANDIDATE_NOT_FOUND" | "PLUGIN_VERSION_ALREADY_PUBLISHED";
+  }>;
+
+  /** Permanently deny one immutable plugin manifest digest for new and existing runtime use. */
+  denyPluginManifest(manifestDigest: string): Promise<{
+    /** Whether the canonical digest is now durably denied. */
+    ok: true;
+  } | {
+    /** The supplied value was not a canonical SHA-256 manifest digest. */
+    ok: false;
+
+    /** Stable validation failure for a caller-correctable digest. */
+    error: "INVALID_MANIFEST_DIGEST";
+  }>;
+
   // Enable or disable new account signups. Existing users can still log in while signups are closed.
   setSignupsEnabled(enabled: boolean): Promise<void>;
 
@@ -1024,7 +1723,7 @@ export type CloudflareAccountOption = {
 // Supported AI providers.
 export type AiModelProvider = "openai" | "anthropic" | "google" | "cloudflare" | "ollama" | "deepseek";
 
-/** Tool names which a custom agent may allow or deny. */
+/** Tool names which a custom agent may allow or deny; plugin authoring and Store authority are intentionally absent. */
 export const CUSTOM_AGENT_TOOL_NAMES = [
   "readFile",
   "writeFile",
@@ -1486,6 +2185,25 @@ export type AgentSpawnerConfig = {
 export interface Overseer extends RpcTarget {
   // Get metadata describing this workspace.
   getMetadata(): Promise<GadgetMetadata>;
+
+  /** Reads runtime health without exposing capability, lifecycle, or worker authority. */
+  getPluginRuntimeStatus(): Promise<PluginRuntimeStatusView>;
+
+  /** Install or update one exact workspace plugin through this role-gated session. */
+  installWorkspacePlugin(request: InstallPluginRequest): Promise<InstallWorkspacePluginResult>;
+
+  /** Revokes one workspace lifecycle before removing its desired-state record. */
+  uninstallWorkspacePlugin(
+    request: UninstallWorkspacePluginRequest,
+  ): Promise<UninstallWorkspacePluginResult>;
+
+  /** Lists retained workspace state without exposing opaque state references. */
+  listDetachedWorkspacePluginStates(): Promise<DetachedWorkspacePluginStateSummary[]>;
+
+  /** Permanently purges one exact detached workspace state lifecycle. */
+  purgeWorkspacePluginState(
+    request: PurgeWorkspacePluginStateRequest,
+  ): Promise<PurgeWorkspacePluginStateResult>;
 
   // Get metadata describing this workspace and subscribe to changes.
   //

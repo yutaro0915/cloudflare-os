@@ -1,3 +1,4 @@
+@import "./design-tokens.generated.css";
 @source "../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
 @import "@cloudflare/kumo/styles";
 @import "tailwindcss";
@@ -25,27 +26,27 @@
      This is the single biggest lever between a "consumer/playground" feel and an enterprise one. */
 
   /* Background tokens — near-white neutrals with a faint warm undertone */
-  --color-kumo-base: #fcfcfb;
-  --color-kumo-elevated: #f8f8f7;
-  --color-kumo-tint: #f3f3f1;
-  --color-kumo-overlay: #fbfbfa;
-  --color-kumo-recessed: #efeeec;
-  --color-kumo-control: #ffffff;
-  --color-kumo-contrast: #14110f;
-  --color-kumo-fill: #e8e7e4;
-  --color-kumo-fill-hover: #dededb;
-  --color-kumo-interact: #cac8c3;
+  --color-kumo-base: var(--semantic-color-background-canvas);
+  --color-kumo-elevated: var(--semantic-color-background-elevated);
+  --color-kumo-tint: var(--semantic-color-background-tint);
+  --color-kumo-overlay: var(--semantic-color-background-overlay);
+  --color-kumo-recessed: var(--semantic-color-background-recessed);
+  --color-kumo-control: var(--semantic-color-background-control);
+  --color-kumo-contrast: var(--semantic-color-foreground-contrast);
+  --color-kumo-fill: var(--semantic-color-background-fill);
+  --color-kumo-fill-hover: var(--semantic-color-background-fill-hover);
+  --color-kumo-interact: var(--semantic-color-border-interactive);
 
   /* Brand — warm orange accent (intent only) */
-  --color-kumo-brand: #ff4801;
-  --color-kumo-brand-hover: #e03f00;
+  --color-kumo-brand: var(--semantic-color-action-brand);
+  --color-kumo-brand-hover: var(--semantic-color-action-brand-hover);
 
   /* Border / line tokens — neutral hairlines */
-  --color-kumo-line: #1411100f;
-  --color-kumo-ring: #cac8c3;
+  --color-kumo-line: var(--semantic-color-border-default);
+  --color-kumo-ring: var(--semantic-color-border-focus);
 
   /* Chat surface tokens */
-  --color-kumo-bubble-user: #f1f0ee;
+  --color-kumo-bubble-user: var(--semantic-color-background-user-bubble);
 
   /* Status tints — keep functional colors, warm the tints */
   --color-kumo-info: oklch(62.3% 0.214 259.815);
@@ -62,14 +63,14 @@
   --color-kumo-tip-stroke: transparent;
 
   /* Text color tokens — near-neutral greys (faint warm undertone, no brown) */
-  --text-color-kumo-default: #1c1a18;
-  --text-color-kumo-default-hover: #100f0d;
-  --text-color-kumo-inverse: #ffffff;
-  --text-color-kumo-strong: #100f0d;
-  --text-color-kumo-subtle: oklch(52% 0.006 60);
-  --text-color-kumo-inactive: oklch(66% 0.005 60);
-  --text-color-kumo-brand: #ff4801;
-  --text-color-kumo-link: #ff4801;
+  --text-color-kumo-default: var(--semantic-color-foreground-default);
+  --text-color-kumo-default-hover: var(--semantic-color-foreground-default-hover);
+  --text-color-kumo-inverse: var(--semantic-color-foreground-inverse);
+  --text-color-kumo-strong: var(--semantic-color-foreground-strong);
+  --text-color-kumo-subtle: var(--semantic-color-foreground-subtle);
+  --text-color-kumo-inactive: var(--semantic-color-foreground-inactive);
+  --text-color-kumo-brand: var(--semantic-color-action-brand-text);
+  --text-color-kumo-link: var(--semantic-color-action-brand-text);
   --text-color-kumo-success: oklch(72.3% 0.219 149.579);
   --text-color-kumo-danger: oklch(63.7% 0.237 25.331);
   --text-color-kumo-warning: oklch(47.6% 0.114 61.907);
@@ -141,24 +142,7 @@
 }
 
 [data-mode="dark"] {
-  /* Seal-inspired dark palette: violet-tinted surfaces around hue 285, not neutral black. */
-  --color-kumo-base: oklch(0.115 0.012 285);
-  --color-kumo-elevated: oklch(0.155 0.011 285);
-  --color-kumo-tint: oklch(0.225 0.025 285);
-  --color-kumo-overlay: oklch(0.155 0.011 285);
-  --color-kumo-recessed: oklch(0.1 0.012 285);
-  --color-kumo-control: oklch(0.155 0.011 285);
-  --color-kumo-contrast: var(--color-kumo-brand);
-  --color-kumo-strong: var(--color-kumo-brand-hover);
-  --color-kumo-fill: oklch(0.225 0.025 285);
-  --color-kumo-fill-hover: oklch(0.295 0.045 285);
-  --color-kumo-interact: oklch(0.34 0.022 285);
-  --color-kumo-line: oklch(0.34 0.022 285);
-  --color-kumo-ring: oklch(0.52 0.065 285);
-  --color-kumo-bubble-user: oklch(0.225 0.025 285);
-
-  --color-kumo-brand: #b84e00;
-  --color-kumo-brand-hover: #a54200;
+  /* DTK owns core surfaces, text, action, and border aliases for this mode. */
 
   --color-kumo-info: oklch(62.3% 0.214 259.815);
   --color-kumo-info-tint: oklch(0.25 0.065 259.815);
@@ -172,14 +156,6 @@
   --color-kumo-tip-shadow: #00000066;
   --color-kumo-tip-stroke: oklch(0.34 0.022 285);
 
-  --text-color-kumo-default: oklch(0.92 0.01 285);
-  --text-color-kumo-default-hover: oklch(0.97 0.006 285);
-  --text-color-kumo-inverse: #ffffff;
-  --text-color-kumo-strong: oklch(0.92 0.01 285);
-  --text-color-kumo-subtle: oklch(0.66 0.02 285);
-  --text-color-kumo-inactive: oklch(0.58 0.025 285);
-  --text-color-kumo-brand: #ff8a5c;
-  --text-color-kumo-link: #ff8a5c;
   --text-color-kumo-success: oklch(79.2% 0.209 151.711);
   --text-color-kumo-danger: oklch(70.4% 0.191 22.216);
   --text-color-kumo-warning: oklch(82.8% 0.189 84.429);
@@ -214,6 +190,17 @@
 
   --shadow-stack: 1px 6px 6px 0 #ffffff08 inset, 0 0 0 1px #ffffff05 inset,
     0 18px 40px 0 #00000033, 0 4px 12px 0 #0000002e;
+}
+
+/* Plugin Store component aliases are generated from the DTK component layer. */
+.plugin-store-card {
+  background: var(--component-plugin-store-card-background);
+  border-color: var(--component-plugin-store-card-border);
+}
+
+.plugin-store-review {
+  background: var(--component-plugin-store-review-background);
+  border-color: var(--component-plugin-store-review-border);
 }
 
 body {

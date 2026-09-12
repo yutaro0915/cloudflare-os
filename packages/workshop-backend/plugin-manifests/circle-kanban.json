@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 5,
+  "pluginId": "circle.personal-kanban",
+  "packageVersion": "1.0.0",
+  "requestedCapabilities": [
+    "plugin.ui.state.mutate"
+  ],
+  "dependencies": [],
+  "runtime": {
+    "kind": "dynamic-worker",
+    "codeArtifactDigest": "sha256:b60621d76f406b4402e128603280fceeb248955a8bc77571ab06d44c13900d8a"
+  },
+  "presentation": {
+    "title": "Personal Kanban",
+    "summary": "Create, move, and delete persistent tasks from a three-column board."
+  },
+  "state": {
+    "kind": "installation"
+  },
+  "uiContributions": [
+    {
+      "contributionId": "board",
+      "slot": "user-plugin.navigation",
+      "title": "Kanban",
+      "renderer": {
+        "kind": "worker-interactive-document-v1",
+        "codeArtifactDigest": "sha256:abc0b609ccbdf0232c711f0b23a586caf06a01d8851abeb142c558e234291a77"
+      }
+    }
+  ]
+}

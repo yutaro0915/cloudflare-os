@@ -1,0 +1,28 @@
+{
+  "$schema": "https://www.designtokens.org/schemas/2025.10/format.json",
+  "primitive": {
+    "color": {
+      "canvas": {"$type": "color", "$description": "Dark application canvas.", "$value": {"colorSpace": "oklch", "components": [0.115, 0.012, 285]}},
+      "elevated": {"$type": "color", "$description": "Dark elevated surface.", "$value": {"colorSpace": "oklch", "components": [0.155, 0.011, 285]}},
+      "tint": {"$type": "color", "$description": "Dark tinted surface.", "$value": {"colorSpace": "oklch", "components": [0.225, 0.025, 285]}},
+      "overlay": {"$type": "color", "$description": "Dark overlay surface.", "$value": {"colorSpace": "oklch", "components": [0.155, 0.011, 285]}},
+      "recessed": {"$type": "color", "$description": "Dark recessed surface.", "$value": {"colorSpace": "oklch", "components": [0.1, 0.012, 285]}},
+      "control": {"$type": "color", "$description": "Dark control surface.", "$value": {"colorSpace": "oklch", "components": [0.155, 0.011, 285]}},
+      "contrast": {"$type": "color", "$description": "Dark high-contrast accent surface.", "$value": {"colorSpace": "srgb", "components": [0.721569, 0.305882, 0], "hex": "#b84e00"}},
+      "fill": {"$type": "color", "$description": "Dark neutral fill.", "$value": {"colorSpace": "oklch", "components": [0.225, 0.025, 285]}},
+      "fill-hover": {"$type": "color", "$description": "Dark hovered neutral fill.", "$value": {"colorSpace": "oklch", "components": [0.295, 0.045, 285]}},
+      "interact": {"$type": "color", "$description": "Dark interactive outline.", "$value": {"colorSpace": "oklch", "components": [0.34, 0.022, 285]}},
+      "user-bubble": {"$type": "color", "$description": "Dark user chat bubble surface.", "$value": {"colorSpace": "oklch", "components": [0.225, 0.025, 285]}},
+      "brand": {"$type": "color", "$description": "Dark primary intentional action.", "$value": {"colorSpace": "srgb", "components": [0.721569, 0.305882, 0], "hex": "#b84e00"}},
+      "brand-hover": {"$type": "color", "$description": "Dark primary action hover.", "$value": {"colorSpace": "srgb", "components": [0.647059, 0.258824, 0], "hex": "#a54200"}},
+      "brand-text": {"$type": "color", "$description": "Dark readable brand foreground.", "$value": {"colorSpace": "srgb", "components": [1, 0.541176, 0.360784], "hex": "#ff8a5c"}},
+      "line": {"$type": "color", "$description": "Dark neutral hairline border.", "$value": {"colorSpace": "oklch", "components": [0.34, 0.022, 285]}},
+      "focus": {"$type": "color", "$description": "Dark keyboard focus outline.", "$value": {"colorSpace": "oklch", "components": [0.52, 0.065, 285]}},
+      "text-default": {"$type": "color", "$description": "Dark default readable foreground.", "$value": {"colorSpace": "oklch", "components": [0.92, 0.01, 285]}},
+      "text-hover": {"$type": "color", "$description": "Dark hovered readable foreground.", "$value": {"colorSpace": "oklch", "components": [0.97, 0.006, 285]}},
+      "text-strong": {"$type": "color", "$description": "Dark strong readable foreground.", "$value": {"colorSpace": "oklch", "components": [0.92, 0.01, 285]}},
+      "text-subtle": {"$type": "color", "$description": "Dark secondary foreground.", "$value": {"colorSpace": "oklch", "components": [0.66, 0.02, 285]}},
+      "text-inactive": {"$type": "color", "$description": "Dark inactive foreground.", "$value": {"colorSpace": "oklch", "components": [0.58, 0.025, 285]}}
+    }
+  }
+}

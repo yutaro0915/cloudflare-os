@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "pluginId": "test.notes",
+  "packageVersion": "1.2.3",
+  "requestedCapabilities": [
+    "ui.panel",
+    "agent.catalog.read"
+  ]
+}

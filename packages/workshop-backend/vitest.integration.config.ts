@@ -6,6 +6,16 @@ const EXPECTED_OPEN_ERROR_CODES = new Set([
   "WORKSPACE_NOT_FOUND",
   "WORKSPACE_ACCESS_DENIED",
 ]);
+const EXPECTED_RPC_ERROR_MESSAGES = new Set([
+  "Unauthorized: this collaborator only has permission to use the gadget's UI.",
+  "Plugin runtime realm is unavailable.",
+  "Plugin runtime plugin is inactive.",
+  "Plugin manifest is denied.",
+  "Plugin runtime capability is no longer authorized.",
+  "Plugin runtime lifecycle is no longer authorized.",
+  "Plugin state owner mismatch.",
+  "Plugin state was purged.",
+]);
 
 export default defineConfig({
   esbuild: {
@@ -16,6 +26,16 @@ export default defineConfig({
     cloudflareTest({
       main: "./src/server.ts",
       remoteBindings: false,
+      miniflare: {
+        bindings: {
+          ADMINS: [
+            "deploymentpluginadmin",
+            "deploymentpluginrejectadmin",
+            "deploymentplugindenylistadmin",
+            "deploymentplugindenyruntimeadmin",
+          ],
+        },
+      },
       wrangler: {
         configPath: "./wrangler.jsonc",
       },
@@ -33,6 +53,7 @@ export default defineConfig({
     onUnhandledError(error) {
       const code = "code" in error ? error.code : undefined;
       if (typeof code === "string" && EXPECTED_OPEN_ERROR_CODES.has(code)) return false;
+      if (EXPECTED_RPC_ERROR_MESSAGES.has(error.message)) return false;
     },
   },
 });

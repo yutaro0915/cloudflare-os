@@ -7,6 +7,8 @@ import { CloudflareGatekeeperUser } from "@gadgets/workshop-shared/cloudflare-ga
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { createTypedStorage, collection } from "@gadgets/typed-storage";
 import { createWorkshopLogger } from "./observability";
+import { PLUGIN_UI_STATE_MUTATE_CAPABILITY } from "./plugin-runtime-capabilities.js";
+import { KeyedSerialQueue } from "./keyed-serial-queue.js";
 import { getAiGatewayConfig } from "./ai-gateway.js";
 import { utcDayKey, nextUtcMidnightIso, DailyQuotaResult } from "./ai-gateway-billing/limits/config.js";
 import type { AdminSettings } from "./admin-settings.js";
@@ -14,6 +16,29 @@ import { isReservedBlueprintKey, readBlueprintKvRecord } from "./blueprint-archi
 import { filterEnabledResources, isResourceDisabled, readAdminConfig } from "./admin-config.js";
 import { buildGatekeeperVendorMap } from "./auth/auth-vendors.js";
 import { createSkillDefinition, validateAgentDefinition, validateSkillDefinition, type AgentDefinitionSnapshot } from "./agent-definition.js";
+import {
+  isCanonicalPluginManifestDigest,
+  type PutUserPluginInstallationResult,
+  type PluginRuntimeCapabilityClaim,
+  isPluginRuntimeCapabilityAuthorized,
+  isPluginRuntimeCandidateCurrent,
+  type PluginRuntimeCandidateClaim,
+  type PluginRuntimeLifecycleClaim,
+  isPluginRuntimeLifecycleAuthorized,
+  type UserPluginAuditEvent,
+  type UserPluginInstallation,
+  type PluginInstallationInput,
+  type UserPluginInstallationRevocation,
+  type DetachedUserPluginStateRecord,
+  type BeginUserPluginUninstallResult,
+  type FinalizeUserPluginUninstallResult,
+  type UserPluginStatePurge,
+  type BeginUserPluginStatePurgeResult,
+  type FinalizeUserPluginStatePurgeResult,
+  type UserPluginCenterOwnerSnapshot,
+  type UserPluginUiInstallationSnapshot,
+  type UserPluginInteractiveInstallationSnapshot,
+} from "./plugin-installation.js";
 
 const logger = createWorkshopLogger("workshop.user");
 
@@ -53,6 +78,35 @@ export type ProvidedAccountInfo = {
 // usable directly, the way the runtime stub actually behaves.
 type AccountCreatorStub = Required<Pick<GatekeeperVendor, "createAccount">>;
 type SingletonAccountStub = Required<Pick<GatekeeperUser, "getSingletonGatekeeperClass" | "startAppUi">>;
+type InteractivePluginStateStub = Pick<
+  DurableObjectStub<import("./plugin-state.js").PluginStateDurableObject>,
+  "readVersioned" | "compareAndSetForHost"
+>;
+
+const PLUGIN_UI_MAX_CONCURRENT_EXECUTIONS = 4;
+const PLUGIN_UI_RATE_LIMIT = 30;
+const PLUGIN_UI_RATE_WINDOW_MS = 60_000;
+const PLUGIN_UI_EXECUTION_LEASE_MS = 30_000;
+const PLUGIN_UI_MAX_TRACKED_RATE_KEYS = 256;
+
+interface PluginUiExecutionLeaseRecord {
+  leaseId: string;
+  pluginId: string;
+  expiresAt: number;
+}
+
+interface PluginUiRateWindowRecord {
+  pluginId: string;
+  timestamps: number[];
+}
+
+export type PluginUiExecutionClaimResult = {
+  ok: true;
+  leaseId: string;
+} | {
+  ok: false;
+  error: "CONCURRENT_LIMIT" | "RATE_LIMIT";
+};
 
 function areCredentialsValid(record: ConnectedAccountRecord): boolean {
   if (record.credentialsExpired) return false;
@@ -173,6 +227,27 @@ function makeUserStorage(storage: DurableObjectStorage) {
           byName: (skill: SkillDefinition) => skill.name,
         },
       }),
+      pluginInstallations: collection<UserPluginInstallation>()({
+        primaryKey: "pluginId",
+      }),
+      pluginAuditEvents: collection<UserPluginAuditEvent>()({
+        primaryKey: "sequence",
+      }),
+      pluginRevocations: collection<UserPluginInstallationRevocation>()({
+        primaryKey: "installationId",
+      }),
+      detachedPluginStates: collection<DetachedUserPluginStateRecord>()({
+        primaryKey: "installationId",
+      }),
+      pluginStatePurges: collection<UserPluginStatePurge>()({
+        primaryKey: "installationId",
+      }),
+      pluginUiExecutionLeases: collection<PluginUiExecutionLeaseRecord>()({
+        primaryKey: "leaseId",
+      }),
+      pluginUiRateWindows: collection<PluginUiRateWindowRecord>()({
+        primaryKey: "pluginId",
+      }),
       gadgets: collection<GadgetRecord>()({
         primaryKey: "id"
       }),
@@ -213,6 +288,7 @@ function makeUserStorage(storage: DurableObjectStorage) {
       quickModel: <string | null>null,
       preferredModel: <string | null>null,
       onboardingCompleted: false,
+      nextPluginAuditSequence: 0,
 
       // Set once the user's pre-existing workspaces have been asked to populate the outputs index
       // (see #backfillOutputs()). Workspaces created since push on their own.
@@ -311,6 +387,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   private storage: UserStorage;
   private vendors: Map<string, Service<GatekeeperVendor>>;
   private adminSettings: DurableObjectNamespace<AdminSettings>;
+  readonly #pluginLifecycle = new KeyedSerialQueue();
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
@@ -328,6 +405,10 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     this.adminSettings = this.ctx.exports.AdminSettings;
 
     this.vendors = buildGatekeeperVendorMap(env);
+  }
+
+  async #withPluginLifecycle<T>(pluginId: string, operation: () => Promise<T> | T): Promise<T> {
+    return this.#pluginLifecycle.run(pluginId, operation);
   }
 
   #migrateAgentDefinitions(): void {
@@ -630,6 +711,558 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
 
   async listAgentDefinitions(): Promise<AgentDefinition[]> {
     return Array.from(this.storage.agentDefinitions.list());
+  }
+
+  /** Lists the plugin desired state owned by this user. */
+  async listUserPluginInstallations(): Promise<UserPluginInstallation[]> {
+    return Array.from(this.storage.pluginInstallations.list());
+  }
+
+  /** Returns an untyped snapshot for a caller that must revalidate this cross-DO system boundary. */
+  async readUserPluginInstallationsSnapshotForRuntimeHost(): Promise<unknown> {
+    return Array.from(this.storage.pluginInstallations.list()).filter(installation =>
+      this.storage.pluginRevocations.get(installation.installationId) === undefined);
+  }
+
+  /** Checks one exact runtime capability against this user's current desired installation. */
+  async authorizePluginCapabilityForRuntimeHost(
+      claim: PluginRuntimeCapabilityClaim): Promise<boolean> {
+    if (claim.scope !== "user" || claim.targetId !== this.ctx.id.toString()) return false;
+    const installation = this.storage.pluginInstallations.get(claim.pluginId);
+    return installation !== undefined &&
+      this.storage.pluginRevocations.get(installation.installationId) === undefined &&
+      isPluginRuntimeCapabilityAuthorized(installation, claim);
+  }
+
+  /** Checks an exact staged candidate against this user's current desired installation. */
+  async authorizePluginCandidateForRuntimeHost(
+      claim: PluginRuntimeCandidateClaim): Promise<boolean> {
+    if (claim.scope !== "user" || claim.targetId !== this.ctx.id.toString()) return false;
+    const installation = this.storage.pluginInstallations.get(claim.pluginId);
+    return installation !== undefined &&
+      this.storage.pluginRevocations.get(installation.installationId) === undefined &&
+      isPluginRuntimeCandidateCurrent(installation, claim);
+  }
+
+  /** Checks the current non-revoked lifecycle before any untrusted active invocation. */
+  async authorizePluginLifecycleForRuntimeHost(
+      claim: PluginRuntimeLifecycleClaim): Promise<boolean> {
+    if (claim.scope !== "user" || claim.targetId !== this.ctx.id.toString()) return false;
+    const installation = this.storage.pluginInstallations.get(claim.pluginId);
+    return installation !== undefined &&
+      this.storage.pluginRevocations.get(installation.installationId) === undefined &&
+      isPluginRuntimeLifecycleAuthorized(installation, claim);
+  }
+
+  /** Lists host-owned plugin audit events in append order. */
+  async listUserPluginAuditEvents(): Promise<UserPluginAuditEvent[]> {
+    return Array.from(this.storage.pluginAuditEvents.list());
+  }
+
+  /** Persists resolved plugin desired state received through the trusted backend boundary. */
+  async putUserPluginInstallation(
+      input: PluginInstallationInput & {
+        /** Trusted manifest-derived ownership request; it is never persisted from browser input. */
+        stateRequirement?: "none" | "installation";
+      }): Promise<PutUserPluginInstallationResult> {
+    return this.#withPluginLifecycle(input.pluginId, () =>
+      this.#putUserPluginInstallation(input));
+  }
+
+  #putUserPluginInstallation(
+      input: PluginInstallationInput & {
+        stateRequirement?: "none" | "installation";
+      }): PutUserPluginInstallationResult {
+    if (!isCanonicalPluginManifestDigest(input.manifestDigest)) {
+      return {ok: false, error: "INVALID_MANIFEST_DIGEST"};
+    }
+    let installationId = "";
+    this.ctx.storage.transactionSync(() => {
+      const existing = this.storage.pluginInstallations.get(input.pluginId);
+      if (
+        existing !== undefined &&
+        this.storage.pluginRevocations.get(existing.installationId) !== undefined
+      ) return;
+      const acceptedInstallationId = existing?.installationId ?? input.installationId;
+      const stateRef = existing?.stateRef ?? (
+        (input.stateRequirement === "installation" ||
+          input.grantedCapabilities.includes("plugin.state.read"))
+          ? this.ctx.exports.PluginStateDurableObject.getByName(JSON.stringify([
+            "plugin-state-v1",
+            "user",
+            this.ctx.id.toString(),
+            input.pluginId,
+            acceptedInstallationId,
+          ])).id.toString()
+          : undefined
+      );
+      const installation: UserPluginInstallation = {
+        schemaVersion: 1,
+        installationId: acceptedInstallationId,
+        scope: "user",
+        targetId: this.ctx.id.toString(),
+        pluginId: input.pluginId,
+        packageVersion: input.packageVersion,
+        manifestDigest: input.manifestDigest,
+        enabled: input.enabled,
+        grantedCapabilities: [...input.grantedCapabilities],
+        config: structuredClone(input.config),
+        ...(stateRef === undefined ? {} : {stateRef}),
+      };
+      const sequence = this.storage.nextPluginAuditSequence.get();
+      const event: UserPluginAuditEvent = {
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_DESIRED_STATE_PUT",
+        actorUserId: this.ctx.id.toString(),
+        scope: "user",
+        targetId: this.ctx.id.toString(),
+        installationId: installation.installationId,
+        pluginId: installation.pluginId,
+        packageVersion: installation.packageVersion,
+        manifestDigest: installation.manifestDigest,
+        enabled: installation.enabled,
+        grantedCapabilities: [...installation.grantedCapabilities],
+        recordedAt: Date.now(),
+      };
+      this.storage.pluginInstallations.put(installation);
+      this.storage.pluginAuditEvents.put(event);
+      this.storage.nextPluginAuditSequence.put(sequence + 1);
+      installationId = installation.installationId;
+    });
+    if (installationId === "") return {ok: false, error: "UNINSTALL_IN_PROGRESS"};
+    return {ok: true, installationId};
+  }
+
+  /** Persists the permanent revocation marker that linearizes a user uninstall. */
+  async beginUserPluginUninstall(
+      pluginId: string,
+      expectedInstallationId: string): Promise<BeginUserPluginUninstallResult> {
+    return this.#withPluginLifecycle(pluginId, () =>
+      this.#beginUserPluginUninstall(pluginId, expectedInstallationId));
+  }
+
+  #beginUserPluginUninstall(
+      pluginId: string,
+      expectedInstallationId: string): BeginUserPluginUninstallResult {
+    let result: BeginUserPluginUninstallResult = {ok: false, error: "PLUGIN_NOT_INSTALLED"};
+    this.ctx.storage.transactionSync(() => {
+      const exactRevocation = this.storage.pluginRevocations.get(expectedInstallationId);
+      if (exactRevocation?.pluginId === pluginId) {
+        result = {ok: true, installationId: expectedInstallationId};
+        return;
+      }
+      const installation = this.storage.pluginInstallations.get(pluginId);
+      if (installation === undefined) {
+        return;
+      }
+      if (installation.installationId !== expectedInstallationId) {
+        result = {ok: false, error: "INSTALLATION_CHANGED"};
+        return;
+      }
+      const existing = this.storage.pluginRevocations.get(installation.installationId);
+      if (existing !== undefined) {
+        result = {ok: true, installationId: existing.installationId};
+        return;
+      }
+      this.storage.pluginRevocations.put({
+        schemaVersion: 1,
+        installationId: installation.installationId,
+        pluginId: installation.pluginId,
+        ...(installation.stateRef === undefined ? {} : {stateRef: installation.stateRef}),
+        startedAt: Date.now(),
+      });
+      result = {ok: true, installationId: installation.installationId};
+    });
+    return result;
+  }
+
+  /** Removes revoked desired state and detaches its state pointer exactly once. */
+  finalizeUserPluginUninstall(
+      installationId: string): FinalizeUserPluginUninstallResult {
+    let result: FinalizeUserPluginUninstallResult = {
+      ok: false,
+      error: "PLUGIN_NOT_INSTALLED",
+    };
+    this.ctx.storage.transactionSync(() => {
+      const revocation = this.storage.pluginRevocations.get(installationId);
+      if (revocation === undefined) return;
+      if (revocation.finalizedAt !== undefined) {
+        result = {
+          ok: true,
+          installationId,
+          retainedState: this.storage.detachedPluginStates.get(installationId) !== undefined,
+        };
+        return;
+      }
+      const installation = this.storage.pluginInstallations.get(revocation.pluginId);
+      if (installation?.installationId !== installationId) {
+        result = {ok: false, error: "UNINSTALL_IN_PROGRESS"};
+        return;
+      }
+      const detachedAt = Date.now();
+      if (installation.stateRef !== undefined) {
+        this.storage.detachedPluginStates.put({
+          schemaVersion: 1,
+          installationId,
+          pluginId: installation.pluginId,
+          packageVersion: installation.packageVersion,
+          manifestDigest: installation.manifestDigest,
+          stateRef: installation.stateRef,
+          detachedAt,
+        });
+      }
+      const sequence = this.storage.nextPluginAuditSequence.get();
+      this.storage.pluginAuditEvents.put({
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_UNINSTALLED",
+        actorUserId: this.ctx.id.toString(),
+        scope: "user",
+        targetId: this.ctx.id.toString(),
+        installationId,
+        pluginId: installation.pluginId,
+        packageVersion: installation.packageVersion,
+        manifestDigest: installation.manifestDigest,
+        enabled: false,
+        grantedCapabilities: [],
+        recordedAt: detachedAt,
+      });
+      this.storage.pluginInstallations.delete(installation.pluginId);
+      this.storage.pluginRevocations.put({...revocation, finalizedAt: detachedAt});
+      this.storage.nextPluginAuditSequence.put(sequence + 1);
+      result = {
+        ok: true,
+        installationId,
+        retainedState: installation.stateRef !== undefined,
+      };
+    });
+    return result;
+  }
+
+  /** Lists host-only detached records; browser projection must omit stateRef. */
+  listDetachedUserPluginStatesForHost(): DetachedUserPluginStateRecord[] {
+    return Array.from(this.storage.detachedPluginStates.list());
+  }
+
+  /** Reads the current plugin owner collections atomically for trusted projection only. */
+  readUserPluginCenterOwnerSnapshotForHost(): UserPluginCenterOwnerSnapshot {
+    return this.ctx.storage.transactionSync(() => ({
+      installations: Array.from(this.storage.pluginInstallations.list(), installation => ({
+        installationId: installation.installationId,
+        pluginId: installation.pluginId,
+        packageVersion: installation.packageVersion,
+        manifestDigest: installation.manifestDigest,
+        enabled: installation.enabled,
+        grantedCapabilities: [...installation.grantedCapabilities],
+        hasState: installation.stateRef !== undefined,
+      })),
+      uninstallingInstallationIds: Array.from(
+        this.storage.pluginRevocations.list(),
+        revocation => revocation.finalizedAt === undefined ? revocation.installationId : null,
+      ).filter(installationId => installationId !== null),
+      detachedStates: Array.from(this.storage.detachedPluginStates.list(), detached => ({
+        installationId: detached.installationId,
+        pluginId: detached.pluginId,
+        packageVersion: detached.packageVersion,
+        manifestDigest: detached.manifestDigest,
+        detachedAt: detached.detachedAt,
+      })),
+      purgingInstallationIds: Array.from(
+        this.storage.pluginStatePurges.list(),
+        purge => purge.phase === "PENDING" ? purge.installationId : null,
+      ).filter(installationId => installationId !== null),
+    }));
+  }
+
+  /** Resolves one exact non-revoked user lifecycle without exposing its state reference. */
+  readUserPluginUiInstallationForHost(
+      pluginId: string,
+      expectedInstallationId: string): UserPluginUiInstallationSnapshot | null {
+    const installation = this.storage.pluginInstallations.get(pluginId);
+    if (
+      installation === undefined || installation.installationId !== expectedInstallationId ||
+      !installation.enabled ||
+      this.storage.pluginRevocations.get(installation.installationId) !== undefined
+    ) return null;
+    return {
+      installationId: installation.installationId,
+      pluginId: installation.pluginId,
+      packageVersion: installation.packageVersion,
+      manifestDigest: installation.manifestDigest,
+    };
+  }
+
+  /** Resolves one exact non-revoked stateful lifecycle for a foreground plugin UI action. */
+  readUserPluginInteractiveInstallationForHost(
+      pluginId: string,
+      expectedInstallationId: string): UserPluginInteractiveInstallationSnapshot | null {
+    const installation = this.storage.pluginInstallations.get(pluginId);
+    if (
+      installation === undefined || installation.installationId !== expectedInstallationId ||
+      !installation.enabled || installation.stateRef === undefined ||
+      !installation.grantedCapabilities.includes(PLUGIN_UI_STATE_MUTATE_CAPABILITY) ||
+      this.storage.pluginRevocations.get(installation.installationId) !== undefined
+    ) return null;
+    return {
+      installationId: installation.installationId,
+      pluginId: installation.pluginId,
+      packageVersion: installation.packageVersion,
+      manifestDigest: installation.manifestDigest,
+      stateRef: installation.stateRef,
+    };
+  }
+
+  /**
+   * Atomically reserves one user-wide execution lease and one plugin sliding-window slot. Expired
+   * leases make crashes self-healing; persisted windows keep the rate bound across isolate restarts.
+   */
+  beginUserPluginUiExecution(pluginId: string): PluginUiExecutionClaimResult {
+    let result: PluginUiExecutionClaimResult = {ok: false, error: "CONCURRENT_LIMIT"};
+    this.ctx.storage.transactionSync(() => {
+      const now = Date.now();
+      const active: PluginUiExecutionLeaseRecord[] = [];
+      for (const lease of Array.from(this.storage.pluginUiExecutionLeases.list())) {
+        if (lease.expiresAt <= now) {
+          this.storage.pluginUiExecutionLeases.delete(lease.leaseId);
+        } else {
+          active.push(lease);
+        }
+      }
+      if (active.length >= PLUGIN_UI_MAX_CONCURRENT_EXECUTIONS) return;
+
+      let timestamps: number[] = [];
+      let trackedRateKeys = 0;
+      let hadCurrentWindow = false;
+      for (const window of Array.from(this.storage.pluginUiRateWindows.list())) {
+        const recent = window.timestamps.filter(
+          timestamp => now - timestamp < PLUGIN_UI_RATE_WINDOW_MS,
+        );
+        if (recent.length === 0) {
+          this.storage.pluginUiRateWindows.delete(window.pluginId);
+          continue;
+        }
+        trackedRateKeys += 1;
+        if (window.pluginId === pluginId) {
+          hadCurrentWindow = true;
+          timestamps = recent;
+        }
+        if (recent.length !== window.timestamps.length) {
+          this.storage.pluginUiRateWindows.put({...window, timestamps: recent});
+        }
+      }
+      if (!hadCurrentWindow && trackedRateKeys >= PLUGIN_UI_MAX_TRACKED_RATE_KEYS) {
+        result = {ok: false, error: "RATE_LIMIT"};
+        return;
+      }
+      this.storage.pluginUiRateWindows.put({pluginId, timestamps});
+      if (timestamps.length >= PLUGIN_UI_RATE_LIMIT) {
+        result = {ok: false, error: "RATE_LIMIT"};
+        return;
+      }
+
+      const leaseId = crypto.randomUUID();
+      this.storage.pluginUiExecutionLeases.put({
+        leaseId,
+        pluginId,
+        expiresAt: now + PLUGIN_UI_EXECUTION_LEASE_MS,
+      });
+      this.storage.pluginUiRateWindows.put({pluginId, timestamps: [...timestamps, now]});
+      result = {ok: true, leaseId};
+    });
+    return result;
+  }
+
+  /** Releases exactly one host-owned execution lease; stale or repeated releases are inert. */
+  finishUserPluginUiExecution(leaseId: string): void {
+    this.storage.pluginUiExecutionLeases.delete(leaseId);
+  }
+
+  /** Reads one host-selected state cell only while the exact interactive lifecycle is current. */
+  async readUserPluginInteractiveStateForHost(
+      pluginId: string,
+      installationId: string,
+      key: string): Promise<unknown> {
+    const installation = this.storage.pluginInstallations.get(pluginId);
+    if (
+      installation === undefined || installation.installationId !== installationId ||
+      !installation.enabled || installation.stateRef === undefined ||
+      !installation.grantedCapabilities.includes(PLUGIN_UI_STATE_MUTATE_CAPABILITY) ||
+      this.storage.pluginRevocations.get(installation.installationId) !== undefined
+    ) return null;
+    const states = this.ctx.exports.PluginStateDurableObject;
+    const state: InteractivePluginStateStub = states.get(states.idFromString(installation.stateRef));
+    return state.readVersioned({
+      scope: "user",
+      targetId: this.ctx.id.toString(),
+      pluginId,
+      installationId,
+    }, key);
+  }
+
+  /** Commits one exact foreground interactive mutation without exposing its state pointer. */
+  async compareAndSetUserPluginInteractiveStateForHost(
+      expected: UserPluginInteractiveInstallationSnapshot,
+      key: string,
+      expectedRevision: number,
+      nextValue: unknown,
+      mutationId: string): Promise<
+        {ok: true; revision: number; replayed: boolean} |
+        {ok: false; currentRevision: number} |
+        {ok: false; currentRevision: number; error: "CELL_QUOTA_EXCEEDED" |
+          "BYTE_QUOTA_EXCEEDED"} |
+        null
+      > {
+    return this.#withPluginLifecycle(expected.pluginId, async () => {
+      const installation = this.storage.pluginInstallations.get(expected.pluginId);
+      if (
+        installation === undefined ||
+        installation.installationId !== expected.installationId ||
+        installation.packageVersion !== expected.packageVersion ||
+        installation.manifestDigest !== expected.manifestDigest ||
+        installation.stateRef !== expected.stateRef ||
+        !installation.enabled || installation.stateRef === undefined ||
+        !installation.grantedCapabilities.includes(PLUGIN_UI_STATE_MUTATE_CAPABILITY) ||
+        this.storage.pluginRevocations.get(installation.installationId) !== undefined
+      ) return null;
+      const states = this.ctx.exports.PluginStateDurableObject;
+      const state: InteractivePluginStateStub =
+        states.get(states.idFromString(installation.stateRef));
+      return state.compareAndSetForHost({
+        scope: "user",
+        targetId: this.ctx.id.toString(),
+        pluginId: expected.pluginId,
+        installationId: expected.installationId,
+      }, key, expectedRevision, nextValue, mutationId);
+    });
+  }
+
+  /** Persists or resumes the owner-side marker for one exact detached-state purge. */
+  beginUserPluginStatePurge(
+      installationId: string): BeginUserPluginStatePurgeResult {
+    let result: BeginUserPluginStatePurgeResult = {
+      ok: false,
+      error: "DETACHED_PLUGIN_STATE_NOT_FOUND",
+    };
+    this.ctx.storage.transactionSync(() => {
+      const exactPurge = this.storage.pluginStatePurges.get(installationId);
+      if (exactPurge !== undefined) {
+        if (exactPurge.phase === "FINALIZED") {
+          result = {
+            ok: true,
+            phase: "FINALIZED",
+            installationId: exactPurge.installationId,
+          };
+          return;
+        }
+        result = {
+          ok: true,
+          phase: "PURGE_REQUIRED",
+          installationId: exactPurge.installationId,
+          stateRef: exactPurge.stateRef,
+          owner: {
+            scope: "user",
+            targetId: this.ctx.id.toString(),
+            pluginId: exactPurge.pluginId,
+            installationId: exactPurge.installationId,
+          },
+        };
+        return;
+      }
+      const detached = this.storage.detachedPluginStates.get(installationId);
+      if (detached === undefined) return;
+      const purge: UserPluginStatePurge = {
+        schemaVersion: 1,
+        phase: "PENDING",
+        installationId: detached.installationId,
+        pluginId: detached.pluginId,
+        packageVersion: detached.packageVersion,
+        manifestDigest: detached.manifestDigest,
+        stateRef: detached.stateRef,
+        startedAt: Date.now(),
+      };
+      this.storage.pluginStatePurges.put(purge);
+      result = {
+        ok: true,
+        phase: "PURGE_REQUIRED",
+        installationId: purge.installationId,
+        stateRef: purge.stateRef,
+        owner: {
+          scope: "user",
+          targetId: this.ctx.id.toString(),
+          pluginId: purge.pluginId,
+          installationId: purge.installationId,
+        },
+      };
+    });
+    return result;
+  }
+
+  /** Runs and resumes the one-way purge saga without exposing its state pointer. */
+  async purgeUserPluginState(
+      installationId: string): Promise<FinalizeUserPluginStatePurgeResult> {
+    const begun = this.beginUserPluginStatePurge(installationId);
+    if (!begun.ok) return begun;
+    if (begun.phase === "FINALIZED") {
+      return {ok: true, installationId: begun.installationId};
+    }
+    const states = this.ctx.exports.PluginStateDurableObject;
+    await states.get(states.idFromString(begun.stateRef)).purge(begun.owner);
+    return this.#finalizeUserPluginStatePurge(begun.installationId);
+  }
+
+  /** Removes one exact detached pointer and appends its purge audit exactly once. */
+  #finalizeUserPluginStatePurge(
+      installationId: string): FinalizeUserPluginStatePurgeResult {
+    let result: FinalizeUserPluginStatePurgeResult = {
+      ok: false,
+      error: "DETACHED_PLUGIN_STATE_NOT_FOUND",
+    };
+    this.ctx.storage.transactionSync(() => {
+      const purge = this.storage.pluginStatePurges.get(installationId);
+      if (purge === undefined) return;
+      if (purge.phase === "FINALIZED") {
+        result = {ok: true, installationId};
+        return;
+      }
+      const detached = this.storage.detachedPluginStates.get(installationId);
+      if (
+        detached === undefined || detached.pluginId !== purge.pluginId ||
+        detached.stateRef !== purge.stateRef
+      ) {
+        return;
+      }
+      const finalizedAt = Date.now();
+      const sequence = this.storage.nextPluginAuditSequence.get();
+      this.storage.pluginAuditEvents.put({
+        schemaVersion: 1,
+        sequence,
+        action: "PLUGIN_STATE_PURGED",
+        actorUserId: this.ctx.id.toString(),
+        scope: "user",
+        targetId: this.ctx.id.toString(),
+        installationId,
+        pluginId: detached.pluginId,
+        packageVersion: detached.packageVersion,
+        manifestDigest: detached.manifestDigest,
+        enabled: false,
+        grantedCapabilities: [],
+        recordedAt: finalizedAt,
+      });
+      this.storage.detachedPluginStates.delete(installationId);
+      this.storage.pluginStatePurges.put({
+        schemaVersion: 1,
+        phase: "FINALIZED",
+        installationId: purge.installationId,
+        pluginId: purge.pluginId,
+        packageVersion: purge.packageVersion,
+        manifestDigest: purge.manifestDigest,
+        purgedAt: finalizedAt,
+      });
+      this.storage.nextPluginAuditSequence.put(sequence + 1);
+      result = {ok: true, installationId};
+    });
+    return result;
   }
 
   async listSkillDefinitions(): Promise<SkillDefinition[]> {

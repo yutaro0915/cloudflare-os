@@ -1,7 +1,7 @@
 import { RpcStub, RpcTarget, newWorkersRpcResponse } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import type { JWTPayload } from "jose";
-import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult, type MyBugReportsResult } from '@gadgets/workshop-shared/api';
+import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, type AgentDefinition, type SkillDefinition, type SkillMetadata, type BugReportInput, type BugReportResult, type MyBugReportsResult, type InstallUserPluginRequest, type InstallUserPluginResult, type UninstallUserPluginRequest, type UninstallUserPluginResult, type DetachedUserPluginStateSummary, type PurgeUserPluginStateRequest, type PurgeUserPluginStateResult, type UserPluginCenterView, type OpenUserPluginUiFrameRequest, type OpenUserPluginUiFrameResult, type UserPluginNavigationEntry, type InteractUserPluginSurfaceRequest, type InteractUserPluginSurfaceResult, type StageUserPluginCandidateRequest, type StageUserPluginCandidateResult } from '@gadgets/workshop-shared/api';
 import { submitBugReportFlow, refreshBugReportStatuses, bugReportIssueUrl,
          BUG_REPORT_STATUS_CACHE_MS } from "./bug-report.js";
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
@@ -23,6 +23,11 @@ import { BlueprintKvRecord, buildBlueprintArchiveStream, sanitizeBlueprintOutput
 import { GatekeeperConnectCallbackImpl, normalizeUsername, UserDurableObject, CLOUDFLARE_VENDOR_ID } from "./user";
 import { createSkillDefinition } from "./agent-definition";
 import { OverseerDurableObject, GatekeeperLoopback, CodeModeTailLoopback, AgentSpawnerGatekeeper, GatekeeperHookLoopback, GadgetTailLoopback, AgentSelfLoopback, TransientStubLoopback } from "./overseer";
+import {
+  PluginRuntimeLoopback,
+  PluginStateReadCapability,
+  PluginWorkspaceMetadataCapability,
+} from "./plugin-runtime-loopback.js";
 import { ExternalMessageGateway } from "./external-message-gateway";
 import { RpcStub as NativeRpcStub } from "cloudflare:workers";
 import { recordAnalytics } from "./analytics";
@@ -31,6 +36,40 @@ import { verifyCfAccessJwt } from "./access.js";
 import { resolveUiFeatureFlags } from "./feature-flags";
 import { serveSiteLogo, SITE_LOGO_PATH } from "./site-logo.js";
 import { createWorkshopLogger } from "./observability";
+import type { PluginManifestCatalog } from "./plugin-manifest-registry.js";
+import {
+  decodePluginConfigurationValue,
+  resolveApprovedPluginManifest,
+} from "./plugin-installation.js";
+import { PluginStateDurableObject } from "./plugin-state.js";
+import { PluginStoreDurableObject } from "./plugin-store.js";
+import { buildUserPluginCenterView } from "./user-plugin-center.js";
+import {
+  createPluginStoreCodeArtifactResolver,
+  createPluginStoreManifestCatalog,
+} from "./plugin-store-resolvers.js";
+import { openUserPluginUiFrame } from "./open-user-plugin-ui-frame.js";
+import {
+  DynamicWorkerPluginUiRenderer,
+  WorkerLoaderPluginUiWorkerStarter,
+} from "./dynamic-worker-plugin-ui-renderer.js";
+import {
+  DynamicWorkerInteractivePluginUi,
+  WorkerLoaderInteractivePluginUiStarter,
+} from "./dynamic-worker-interactive-plugin-ui.js";
+import {
+  buildUserPluginNavigation,
+  interactUserPluginSurface,
+} from "./user-plugin-interactive-surface.js";
+import {
+  DynamicWorkerPluginCandidateIsolationTester,
+  PluginCandidatePipeline,
+  WebCryptoPluginCandidateSigner,
+} from "./plugin-candidate-pipeline.js";
+import {
+  buildUserAuthoredPluginCandidate,
+  projectUserPluginCandidateReview,
+} from "./user-plugin-authoring.js";
 
 const logger = createWorkshopLogger("workshop.server");
 
@@ -60,6 +99,15 @@ export { OverseerDurableObject, GatekeeperLoopback, GatekeeperHookLoopback,
     CodeModeTailLoopback, AgentSpawnerGatekeeper, GadgetTailLoopback,
     AgentSelfLoopback, TransientStubLoopback };
 
+// Re-export the installation-scoped Dynamic Worker authority loopback.
+export { PluginRuntimeLoopback, PluginStateReadCapability, PluginWorkspaceMetadataCapability };
+
+// Re-export generic installation state reached only through host-owned capability facades.
+export { PluginStateDurableObject };
+
+// Re-export the deployment Store reached only through trusted host and admin boundaries.
+export { PluginStoreDurableObject };
+
 // Re-export service-binding entrypoint for external channel integrations.
 export { ExternalMessageGateway };
 
@@ -78,7 +126,8 @@ type Env = Cloudflare.Env & {
 class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   constructor(private ctx: ExecutionContext, private env: Env,
       private user: DurableObjectStub<UserDurableObject>,
-      private abortSession: (reason: Error) => void) {
+      private abortSession: (reason: Error) => void,
+      private pluginManifests: Promise<PluginManifestCatalog>) {
     super();
 
     this.overseers = this.ctx.exports.OverseerDurableObject;
@@ -89,6 +138,26 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   private overseers: DurableObjectNamespace<OverseerDurableObject>;
   private adminSettings: DurableObjectNamespace<AdminSettings>;
   private users: DurableObjectNamespace<UserDurableObject>;
+
+  async #runBoundedPluginUi<T>(
+      pluginId: string,
+      operation: () => Promise<T>): Promise<
+        {ok: true; value: T} |
+        {ok: false; error: "PLUGIN_UI_BUSY" | "PLUGIN_UI_RATE_LIMITED"}
+      > {
+    const claim = await this.user.beginUserPluginUiExecution(pluginId);
+    if (!claim.ok) {
+      return {
+        ok: false,
+        error: claim.error === "RATE_LIMIT" ? "PLUGIN_UI_RATE_LIMITED" : "PLUGIN_UI_BUSY",
+      };
+    }
+    try {
+      return {ok: true, value: await operation()};
+    } finally {
+      await this.user.finishUserPluginUiExecution(claim.leaseId).catch(() => {});
+    }
+  }
 
   #isAdmin(): boolean {
     let name = this.user.id.name;
@@ -111,6 +180,198 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
 
   whoami(): Promise<AiChatAuthorInfo> {
     return this.user.whoami();
+  }
+  async installUserPlugin(
+      request: InstallUserPluginRequest): Promise<InstallUserPluginResult> {
+    const resolver = await this.pluginManifests;
+    const resolved = await resolveApprovedPluginManifest(resolver, request);
+    if (!resolved.ok) return resolved;
+    const manifest = resolved.manifest;
+
+    const installationId = crypto.randomUUID();
+    const result = await this.user.putUserPluginInstallation({
+      installationId,
+      pluginId: manifest.pluginId,
+      packageVersion: manifest.packageVersion,
+      manifestDigest: manifest.manifestDigest,
+      enabled: true,
+      grantedCapabilities: [...manifest.requestedCapabilities],
+      config: null,
+      stateRequirement: manifest.state?.kind ?? "none",
+    });
+    if (!result.ok) {
+      throw new Error("Verified plugin manifest was rejected by UserDurableObject.");
+    }
+    return {ok: true, installationId: result.installationId};
+  }
+  async uninstallUserPlugin(
+      request: UninstallUserPluginRequest): Promise<UninstallUserPluginResult> {
+    const begun = await this.user.beginUserPluginUninstall(
+      request.pluginId,
+      request.expectedInstallationId,
+    );
+    if (!begun.ok) return begun;
+    return this.user.finalizeUserPluginUninstall(begun.installationId);
+  }
+  async listDetachedUserPluginStates(): Promise<DetachedUserPluginStateSummary[]> {
+    const records = await this.user.listDetachedUserPluginStatesForHost();
+    return records.map(record => ({
+      installationId: record.installationId,
+      pluginId: record.pluginId,
+      packageVersion: record.packageVersion,
+      detachedAt: record.detachedAt,
+    }));
+  }
+  async purgeUserPluginState(
+      request: PurgeUserPluginStateRequest): Promise<PurgeUserPluginStateResult> {
+    return this.user.purgeUserPluginState(request.installationId);
+  }
+  async getUserPluginCenter(): Promise<UserPluginCenterView> {
+    const [manifests, owner] = await Promise.all([
+      this.pluginManifests.then(catalog => catalog.list()),
+      this.user.readUserPluginCenterOwnerSnapshotForHost(),
+    ]);
+    return buildUserPluginCenterView({manifests, ...owner});
+  }
+  async stageUserPluginCandidate(
+      request: StageUserPluginCandidateRequest): Promise<StageUserPluginCandidateResult> {
+    if (!this.#isAdmin()) return {ok: false, error: "ADMIN_REQUIRED"};
+    const candidate = await buildUserAuthoredPluginCandidate(request);
+    if (candidate === null) return {ok: false, error: "INVALID_INPUT"};
+    const pipeline = new PluginCandidatePipeline(
+      this.ctx.exports.PluginStoreDurableObject.getByName(""),
+      {generate: async () => candidate},
+      new DynamicWorkerPluginCandidateIsolationTester(this.env.LOADER),
+      new WebCryptoPluginCandidateSigner(),
+    );
+    const staged = await pipeline.run({
+      prompt: "host-owned human authoring template",
+      requestedScope: "user",
+      producerId: this.user.id.name!,
+      producerKind: "human",
+    });
+    if (!staged.ok) {
+      return {
+        ok: false,
+        error: staged.error === "ISOLATION_TEST_FAILED"
+          ? "ISOLATION_TEST_FAILED"
+          : staged.error === "CANDIDATE_REJECTED"
+            ? "CANDIDATE_REJECTED"
+            : "INVALID_INPUT",
+      };
+    }
+    return {
+      ok: true,
+      candidateId: staged.candidateId,
+      manifestDigest: staged.manifestDigest,
+      pluginId: request.pluginId,
+      packageVersion: request.packageVersion,
+      review: projectUserPluginCandidateReview(request, candidate),
+    };
+  }
+  async openUserPluginUiFrame(
+      request: OpenUserPluginUiFrameRequest): Promise<OpenUserPluginUiFrameResult> {
+    const catalog = await this.pluginManifests;
+    const adminSettings = this.adminSettings.getByName("");
+    const renderer = new DynamicWorkerPluginUiRenderer(
+      new WorkerLoaderPluginUiWorkerStarter(this.env.LOADER),
+      createPluginStoreCodeArtifactResolver(
+        this.ctx.exports.PluginStoreDurableObject.getByName(""),
+      ),
+    );
+    let executionFailure: "PLUGIN_UI_BUSY" | "PLUGIN_UI_RATE_LIMITED" | undefined;
+    const result = await openUserPluginUiFrame(request, {
+      readInstallation: (pluginId, installationId) =>
+        this.user.readUserPluginUiInstallationForHost(pluginId, installationId),
+      resolveManifest: (pluginId, packageVersion) => catalog.resolve(pluginId, packageVersion),
+      isManifestDenied: manifestDigest =>
+        adminSettings.isPluginManifestDeniedForRuntimeHost(manifestDigest),
+      renderArtifact: async codeArtifactDigest => {
+        const execution = await this.#runBoundedPluginUi(
+          request.pluginId,
+          () => renderer.render(codeArtifactDigest),
+        );
+        if (!execution.ok) {
+          executionFailure = execution.error;
+          return null;
+        }
+        return execution.value;
+      },
+    });
+    return !result.ok && result.error === "PLUGIN_UI_NOT_AVAILABLE" && executionFailure !== undefined
+      ? {ok: false, error: executionFailure}
+      : result;
+  }
+  async listUserPluginNavigation(): Promise<UserPluginNavigationEntry[]> {
+    const [catalog, owner] = await Promise.all([
+      this.pluginManifests,
+      this.user.readUserPluginCenterOwnerSnapshotForHost(),
+    ]);
+    const manifests = await catalog.list();
+    const adminSettings = this.adminSettings.getByName("");
+    return buildUserPluginNavigation(
+      owner,
+      manifests,
+      digest => adminSettings.isPluginManifestDeniedForRuntimeHost(digest),
+    );
+  }
+  async interactUserPluginSurface(
+      request: InteractUserPluginSurfaceRequest): Promise<InteractUserPluginSurfaceResult> {
+    const catalog = await this.pluginManifests;
+    const adminSettings = this.adminSettings.getByName("");
+    const renderer = new DynamicWorkerInteractivePluginUi(
+      new WorkerLoaderInteractivePluginUiStarter(this.env.LOADER),
+      createPluginStoreCodeArtifactResolver(
+        this.ctx.exports.PluginStoreDurableObject.getByName(""),
+      ),
+    );
+    let executionFailure: "PLUGIN_UI_BUSY" | "PLUGIN_UI_RATE_LIMITED" | undefined;
+    const result = await interactUserPluginSurface(request, {
+      userId: this.user.id.toString(),
+      readInstallation: (pluginId, installationId) =>
+        this.user.readUserPluginInteractiveInstallationForHost(pluginId, installationId),
+      resolveManifest: (pluginId, packageVersion) => catalog.resolve(pluginId, packageVersion),
+      isManifestDenied: digest =>
+        adminSettings.isPluginManifestDeniedForRuntimeHost(digest),
+      readState: async (installation, key) => {
+        const stateResult = await this.user.readUserPluginInteractiveStateForHost(
+          installation.pluginId,
+          installation.installationId,
+          key,
+        );
+        if (
+          typeof stateResult !== "object" || stateResult === null || Array.isArray(stateResult)
+        ) return null;
+        const revision = Reflect.get(stateResult, "revision");
+        if (!Number.isSafeInteger(revision) || (revision as number) < 0) return null;
+        return {
+          revision: revision as number,
+          value: decodePluginConfigurationValue(Reflect.get(stateResult, "value")),
+        };
+      },
+      runArtifact: async (digest, interaction) => {
+        const execution = await this.#runBoundedPluginUi(
+          request.pluginId,
+          () => renderer.interact(digest, interaction),
+        );
+        if (!execution.ok) {
+          executionFailure = execution.error;
+          return null;
+        }
+        return execution.value;
+      },
+      compareAndSetState: (installation, key, revision, value, mutationId) =>
+        this.user.compareAndSetUserPluginInteractiveStateForHost(
+          installation,
+          key,
+          revision,
+          value,
+          mutationId,
+        ),
+    });
+    return !result.ok && result.error === "PLUGIN_UI_NOT_AVAILABLE" && executionFailure !== undefined
+      ? {ok: false, error: executionFailure}
+      : result;
   }
   setOwnDisplayName(name: string): Promise<void> {
     return this.user.setOwnDisplayName(name);
@@ -626,10 +887,13 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     if (!this.#isAdmin()) return null;
     // #isAdmin() guarantees a non-empty user id name. Forwarded to gatekeepers when listing the
     // resource catalog so RBAC-gated ones still surface for this admin.
-    let adminUserId = this.user.id.name!;
+    let adminProfileId = this.user.id.name!;
     // @ts-expect-error Cap'n Web RPC stubs and native RPC targets are compatible but the type
     //     system doesn't know this.
-    return new AdminApiImpl(this.adminSettings.getByName(""), adminUserId);
+    return new AdminApiImpl(this.adminSettings.getByName(""), {
+      userId: this.user.id.toString(),
+      profileId: adminProfileId,
+    }, this.pluginManifests, this.ctx.exports.PluginStoreDurableObject.getByName(""));
   }
 
   async submitBugReport(report: BugReportInput): Promise<BugReportResult> {
@@ -716,6 +980,7 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
 
   constructor(private ctx: ExecutionContext, private env: Env,
       private abortSession: (reason: Error) => void,
+      private pluginManifests: Promise<PluginManifestCatalog>,
       private accessPayload?: JWTPayload) {
     super();
     this.users = this.ctx.exports.UserDurableObject;
@@ -765,7 +1030,9 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
       user_id: userId.toString(),
       source: "session_token",
     });
-    return new AuthenticatedApiImpl(this.ctx, this.env, stub, this.abortSession);
+    return new AuthenticatedApiImpl(
+      this.ctx, this.env, stub, this.abortSession, this.pluginManifests,
+    );
   }
 
   async authenticateFromCfAccess(): Promise<AuthenticatedApi> {
@@ -790,7 +1057,9 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
       user_id: userId.toString(),
       source: "cf_access",
     });
-    return new AuthenticatedApiImpl(this.ctx, this.env, stub, this.abortSession);
+    return new AuthenticatedApiImpl(
+      this.ctx, this.env, stub, this.abortSession, this.pluginManifests,
+    );
   }
 
   async login(username: string, passwordHash: Uint8Array): Promise<string | null> {
@@ -940,8 +1209,11 @@ export default {
         resp?.webSocket?.close();
       };
 
+      const pluginManifests = Promise.resolve(createPluginStoreManifestCatalog(
+        ctx.exports.PluginStoreDurableObject.getByName(""),
+      ));
       resp = await newWorkersRpcResponse(req,
-          new PublicApiImpl(ctx, env, abortSession, accessPayload));
+          new PublicApiImpl(ctx, env, abortSession, pluginManifests, accessPayload));
 
       if (aborted) {
         // Oops, we missed the abortSession() call while awaiting, apply now.

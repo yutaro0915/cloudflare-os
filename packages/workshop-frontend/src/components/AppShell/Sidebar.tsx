@@ -6,6 +6,7 @@ import {
   Hexagon,
   House,
   MagnifyingGlass,
+  PuzzlePiece,
   Robot,
   SidebarSimple,
   Sparkle,
@@ -16,6 +17,7 @@ import {
 import { useSiteName } from '../../ServerConfigContext'
 import SiteLogo from '../SiteLogo'
 import { useGatekeeperApps } from '../../useGatekeeperApps'
+import { useUserPluginNavigation } from '../../useUserPluginNavigation'
 import { openCommandPalette } from './commandPaletteBus'
 import SidebarItem from './SidebarItem'
 import {
@@ -47,6 +49,7 @@ export default function Sidebar({
   // and is connected / enabled for everyone). Disabled or not-yet-connected ones aren't returned, so
   // they simply don't appear. The set is fully dynamic — no gatekeeper is hardcoded.
   const gatekeeperApps = useGatekeeperApps()
+  const pluginNavigation = useUserPluginNavigation()
 
   return (
     <aside
@@ -199,6 +202,22 @@ export default function Sidebar({
               icon={<Sparkle size={14} weight="regular" />}
               collapsed={collapsed}
             />
+            <SidebarItem
+              to="/plugins"
+              label="Plugin Store"
+              icon={<PuzzlePiece size={14} weight="regular" />}
+              collapsed={collapsed}
+            />
+            {pluginNavigation.map(entry => (
+              <SidebarItem
+                key={`${entry.pluginId}\0${entry.contributionId}`}
+                to="/plugin/$pluginId/$contributionId"
+                params={{pluginId: entry.pluginId, contributionId: entry.contributionId}}
+                label={entry.title}
+                icon={<PuzzlePiece size={14} weight="fill" />}
+                collapsed={collapsed}
+              />
+            ))}
             <SidebarItem
               to="/tools"
               label="Tools"
